@@ -1,0 +1,20 @@
+name: Shell
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax check
+        run: |
+          bash -n scripts/codex-deepseek-sidecar
+          bash -n scripts/codex-deepseek-subagent
+          bash -n scripts/terminal-chat
+      - name: ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: ./scripts
