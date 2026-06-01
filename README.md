@@ -1,0 +1,145 @@
+# codex-deepseek-sidecar
+
+[English](README.md) | [中文](README.zh-CN.md)
+
+Run a DeepSeek-powered Codex sidecar next to your main Codex agent.
+
+`codex-deepseek-sidecar` is a Codex skill and shell wrapper for delegating bounded tasks to a DeepSeek-backed Codex CLI session. The pattern is simple: keep a high-end GPT model as the main brain, then hand off parallel research, review, debugging, log inspection, or implementation attempts to lower-cost but still capable DeepSeek workers, all inside the Codex harness.
+
+This is a cost-effective agent-era workflow: premium reasoning coordinates the work, economical sidecars do the heavy lifting, and Codex provides the sandbox, tools, session persistence, and command execution layer.
+
+## Why It Exists
+
+- **Use the right model for the right job**: GPT can stay focused on planning and synthesis while DeepSeek handles bounded worker tasks.
+- **Keep Codex's harness**: sidecars still run through Codex CLI, so they can inspect files, run commands, use persistent sessions, and report evidence.
+- **Parallelize safely**: name sidecar tasks with `--task-id`, list them, check status, and resume the right worker without guessing.
+- **Reduce cost without giving up intelligence**: delegate repetitive exploration, reviews, and verification to a cheaper model while keeping a stronger model in charge.
+- **Stay observable**: by default each run opens a Terminal monitor, then turns into an interactive follow-up prompt.
+
+## What It Does
+
+- Starts DeepSeek-backed Codex CLI sidecar sessions.
+- Records reusable session IDs by project and optional task ID.
+- Supports `--status`, `--list`, `--resume`, and direct `--session-id` recovery.
+- Runs children in a clean UTF-8 environment with explicit `--pass-env` forwarding.
+- Prevents concurrent resume of the same session with a per-session lock.
+- Keeps a compatibility entrypoint at `scripts/codex-deepseek-subagent`.
+
+## Requirements
+
+- macOS for the Terminal monitor window.
+- [Codex CLI](https://github.com/openai/codex) installed and authenticated.
+- A DeepSeek-compatible Codex profile, usually named `deepseek`.
+- Optional: VibeAround or another local/provider bridge if that is how your DeepSeek profile is routed.
+
+## Install
+
+Clone this repository as a Codex skill:
+
+```bash
+git clone https://github.com/Zedong-Liu/codex-deepseek-sidecar.git \
+  ~/.codex/skills/codex-deepseek-sidecar
+cd ~/.codex/skills/codex-deepseek-sidecar
+chmod +x scripts/*
+```
+
+Optional command shortcut:
+
+```bash
+mkdir -p ~/.codex/bin
+ln -s ~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar \
+  ~/.codex/bin/codex-deepseek-sidecar
+```
+
+Configure or verify the DeepSeek profile:
+
+```bash
+~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar --configure
+```
+
+## Quick Start
+
+Delegate one task:
+
+```bash
+PROJECT="/absolute/path/to/project"
+
+~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar \
+  --cd "$PROJECT" \
+  --task-id review-auth \
+  "Review the auth module. Report findings with file and line references. Do not edit files."
+```
+
+Check the worker:
+
+```bash
+~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar \
+  --cd "$PROJECT" --task-id review-auth --status
+```
+
+List sidecars for a project:
+
+```bash
+~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar \
+  --cd "$PROJECT" --list
+```
+
+Resume the named worker:
+
+```bash
+~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar \
+  --cd "$PROJECT" --task-id review-auth --resume \
+  "Continue from your previous findings and verify the highest-risk issue."
+```
+
+## Organizer Pattern
+
+This project intentionally stays small. It does not try to teach the main agent how to be an organizer. The calling agent remains responsible for task decomposition, permissions, conflict management, and synthesis.
+
+Recommended parallel workflow:
+
+1. Give each worker a stable `--task-id`, such as `review-auth`, `inspect-tests`, or `bench-sro`.
+2. Make prompts self-contained: task, context, expected output, and whether edits are allowed.
+3. Use `--list` and `--status` before follow-ups.
+4. Resume by `--task-id` for normal operation.
+5. Use `--session-id` only as a recovery escape hatch.
+
+## Flags
+
+| Flag | Purpose |
+| ---- | ------- |
+| `--cd DIR` | Project directory for session tracking. |
+| `--task-id NAME` | Name a sidecar task within `--cd DIR` for status/resume lookup. |
+| `--resume`, `-r` | Continue a recorded session. With `--task-id`, resumes that named task. |
+| `--session-id UUID` | Resume a specific Codex session directly. Useful for recovery. |
+| `--status` | Report `running`, `idle`, `missing`, or `untracked`. No model request. |
+| `--list` | List recorded sidecar sessions for `--cd DIR`. No model request. |
+| `--no-monitor` | Skip the Terminal monitor window. Useful for automation. |
+| `--pass-env NAME` | Pass one UTF-8 environment variable into the isolated child. Repeatable. |
+| `--profile NAME` | Use a non-default Codex profile. Default: `deepseek`. |
+| `--json` | Request Codex JSONL event output. |
+| `--no-doctor-check` | Skip the pre-flight `codex doctor` check. |
+
+## Prompt Shape
+
+```text
+Task: [concrete, bounded goal]
+Context: [paths, error snippet, constraints]
+Expected: [conclusion, evidence, patch/test references if code was edited]
+Constraints: [read-only scope, or explicit permission to edit/run tests]
+```
+
+## Repository Layout
+
+```text
+.
+├── SKILL.md
+├── agents/openai.yaml
+├── scripts/codex-deepseek-sidecar
+├── scripts/codex-deepseek-subagent
+└── scripts/terminal-chat
+```
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).

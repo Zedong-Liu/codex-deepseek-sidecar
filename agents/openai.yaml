@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex DeepSeek Sidecar"
+  short_description: "Delegate Codex tasks to a DeepSeek sidecar"
+  default_prompt: "Use $codex-deepseek-sidecar to delegate a bounded task and keep its interactive Terminal session available for follow-ups."

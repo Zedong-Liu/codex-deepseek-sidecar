@@ -1,0 +1,576 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Self-locate: derive sibling paths from $0 so the skill works from any
+# directory name under ~/.codex/skills/ without hardcoded paths.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  codex-deepseek-sidecar [--profile NAME] [--cd DIR] [--task-id NAME] [--json] [--resume] [--session-id ID] [--pass-env NAME] [--no-monitor] [--verbose-stderr] [--no-doctor-check] PROMPT...
+  codex-deepseek-sidecar [--profile NAME] [--cd DIR] [--task-id NAME] [--json] [--resume] [--session-id ID] [--pass-env NAME] [--no-monitor] [--verbose-stderr] [--no-doctor-check] -
+  codex-deepseek-sidecar [--profile NAME] [--cd DIR] [--task-id NAME] [--session-id ID] --status
+  codex-deepseek-sidecar [--profile NAME] [--cd DIR] [--task-id NAME] --list
+  codex-deepseek-sidecar [--profile NAME] --configure
+
+Runs Codex CLI as a DeepSeek-backed sidecar in a clean UTF-8 environment.
+Execution opens a Terminal log monitor by default.
+Without --resume or --session-id, starts a new persistent session and records the session ID.
+With --resume, continues the most recent DeepSeek sidecar session in this working directory.
+With --session-id <UUID>, resumes a specific session.
+With --task-id NAME, records and looks up a named task within the working directory.
+Use --status before follow-ups to report whether a recorded session is running or idle.
+Use --list to show recorded sessions for the working directory.
+Use --pass-env NAME repeatedly for task variables that the sidecar must inherit.
+Use --no-monitor for non-interactive runs that should not open Terminal.
+Use --verbose-stderr to display known harmless Codex startup warnings.
+Use --no-doctor-check to skip the pre-flight connectivity check.
+Use "-" to read the prompt from stdin.
+EOF
+}
+
+workdir="${PWD}"
+resume=0
+json=0
+verbose_stderr=0
+status_only=0
+list_only=0
+monitor_enabled=1
+profile="deepseek"
+configure_only=0
+doctor_check=1
+session_id=""
+task_id=""
+pass_env=()
+args=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --cd|-C)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      workdir="$2"
+      shift 2
+      ;;
+    --profile|-p)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      profile="$2"; shift 2 ;;
+    --resume|-r)
+      resume=1
+      shift
+      ;;
+    --session-id)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      session_id="$2"
+      shift 2
+      ;;
+    --task-id)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      task_id="$2"
+      shift 2
+      ;;
+    --json)
+      json=1
+      shift
+      ;;
+    --pass-env)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      pass_env+=("$2")
+      shift 2
+      ;;
+    --verbose-stderr)
+      verbose_stderr=1
+      shift
+      ;;
+    --no-monitor)
+      monitor_enabled=0
+      shift
+      ;;
+    --configure)
+      configure_only=1; shift ;;
+    --no-doctor-check)
+      doctor_check=0; shift ;;
+    --status)
+      status_only=1
+      shift
+      ;;
+    --list)
+      list_only=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      args+=("$@")
+      break
+      ;;
+    *)
+      args+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ "$status_only" -eq 1 && "$list_only" -eq 1 ]]; then
+  echo "error: --status and --list cannot be used together" >&2
+  exit 2
+fi
+if [[ ( "$status_only" -eq 1 || "$list_only" -eq 1 ) && ${#args[@]} -ne 0 ]]; then
+  echo "error: --status and --list do not accept a prompt" >&2
+  exit 2
+fi
+if [[ "$status_only" -eq 0 && "$list_only" -eq 0 && "$configure_only" -eq 0 && ${#args[@]} -eq 0 ]]; then
+  usage >&2
+  exit 2
+fi
+if [[ -n "$task_id" && ! "$task_id" =~ ^[A-Za-z0-9][A-Za-z0-9_.:-]*$ ]]; then
+  echo "error: invalid task id: $task_id" >&2
+  echo "  Use letters, numbers, dot, underscore, colon, or dash; start with a letter or number." >&2
+  exit 2
+fi
+
+# Helper: parse codex doctor JSON for critical check failures
+parse_doctor() {
+  python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+checks = d.get("checks", {})
+bad = []
+for cid in ("config.load", "installation", "network.provider_reachability"):
+    c = checks.get(cid, {})
+    s = c.get("status", "?")
+    if s != "ok":
+        bad.append("[" + s + "] " + c.get("summary", cid))
+if bad:
+    print("\n".join(bad))
+else:
+    print("ok")
+'
+}
+
+# ── configure mode
+
+if [[ "$configure_only" -eq 1 ]]; then
+  [[ ${#args[@]} -eq 0 ]] || { echo "error: --configure does not accept a prompt" >&2; exit 2; }
+  CONFIG_TOML="${HOME}/.codex/config.toml"
+  if [[ -f "$CONFIG_TOML" ]] && grep -q "^\[profiles\.${profile}\]" "$CONFIG_TOML" 2>/dev/null; then
+    echo "Profile [profiles.${profile}] already exists."
+  else
+    echo "Profile [profiles.${profile}] not found in config.toml."
+    echo ""
+    echo "Choose your DeepSeek API style:"
+    echo "  1. VibeAround  - HTTP proxy on 127.0.0.1:12358"
+    echo "  2. CC switch    - config.toml provider switch"
+    echo ""
+    printf "Enter 1 or 2: "; IFS= read -r choice || true
+    mkdir -p "$(dirname "$CONFIG_TOML")"
+    {
+      echo ""
+      echo "[profiles.${profile}]"
+      echo 'model_provider = "deepseek"'
+      echo 'model = "deepseek-v4-pro"'
+      echo 'model_reasoning_effort = "high"'
+      echo 'model_context_window = 1048576'
+      echo 'model_auto_compact_token_limit = 600000'
+    } >> "$CONFIG_TOML"
+    echo "Wrote [profiles.${profile}] to config.toml."
+    [[ "${choice:-}" == "2" ]] && echo "Ensure CC switch is configured for DeepSeek, then restart Codex." \
+      || echo "Ensure VibeAround proxy is running on 127.0.0.1:12358, then restart Codex."
+    echo ""
+  fi
+  echo "Running connectivity check..."
+  command -v codex &>/dev/null || { echo "error: codex not found in PATH" >&2; exit 1; }
+  doctor_out=$(codex doctor -c profile="$profile" --json --summary 2>&1) || true
+  result=$(printf '%s' "$doctor_out" | parse_doctor 2>/dev/null) || result="parse_error"
+  case "$result" in
+    ok) echo "Connectivity check passed."; exit 0 ;;
+    parse_error) echo "error: could not parse doctor output:" >&2; printf '%s\n' "$doctor_out" >&2; exit 1 ;;
+    *) echo "Connectivity check failed:" >&2; printf '%s\n' "$result" >&2; exit 1 ;;
+  esac
+fi
+
+# Codex's extension-host tool bridge expects UTF-8 environment strings. Build
+# its environment from safe literals so unrelated desktop variables containing
+# malformed bytes cannot panic tool execution.
+safe_user="${USER}"
+safe_home="${HOME}"
+
+clean_env=(
+  /usr/bin/env -i
+  "HOME=$safe_home"
+  "USER=$safe_user"
+  "LOGNAME=$safe_user"
+  "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  "SHELL=/bin/zsh"
+  "TERM=xterm-256color"
+  "LANG=en_US.UTF-8"
+  "LC_ALL=en_US.UTF-8"
+  "TMPDIR=/tmp/"
+  "CODEX_HOME=${HOME}/.codex"
+)
+
+if [[ ${#pass_env[@]} -gt 0 ]]; then
+  for env_name in "${pass_env[@]}"; do
+    if [[ ! "$env_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "error: invalid environment variable name for --pass-env: $env_name" >&2
+      exit 2
+    fi
+    if [[ -z "${!env_name+x}" ]]; then
+      echo "error: --pass-env variable is not set: $env_name" >&2
+      exit 2
+    fi
+    if ! printf '%s' "${!env_name}" | /usr/bin/iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then
+      echo "error: --pass-env value is not valid UTF-8: $env_name" >&2
+      exit 2
+    fi
+    clean_env+=("$env_name=${!env_name}")
+  done
+fi
+
+SESSION_FILE="/tmp/deepseek-sidecar-sessions.txt"
+LOCK_ROOT="/tmp/deepseek-sidecar-locks"
+mkdir -p "$LOCK_ROOT"
+
+extract_session_id() {
+  sed 's/.* session_id=//'
+}
+
+extract_workdir() {
+  local line="$1"
+  line="${line#workdir=}"
+  if [[ "$line" == *" task_id="* ]]; then
+    printf '%s' "${line%% task_id=*}"
+  else
+    printf '%s' "${line%% session_id=*}"
+  fi
+}
+
+extract_task_id() {
+  local line="$1"
+  if [[ "$line" == *" task_id="* ]]; then
+    line="${line#* task_id=}"
+    printf '%s' "${line%% session_id=*}"
+  else
+    printf '%s' "-"
+  fi
+}
+
+latest_session_line() {
+  [[ -f "$SESSION_FILE" ]] || return 0
+  if [[ -n "$task_id" ]]; then
+    grep -F "workdir=${workdir} task_id=${task_id} session_id=" "$SESSION_FILE" 2>/dev/null | tail -1 || true
+  else
+    grep -F "workdir=${workdir} " "$SESSION_FILE" 2>/dev/null | tail -1 || true
+  fi
+}
+
+session_is_running_by_id() {
+  local sid="$1"
+  local pid=""
+  local dir="$LOCK_ROOT/$sid.lock"
+  [[ -d "$dir" ]] || return 1
+  [[ -f "$dir/pid" ]] && pid=$(cat "$dir/pid" 2>/dev/null || true)
+  [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
+}
+
+if [[ "$list_only" -eq 1 ]]; then
+  found=0
+  if [[ -f "$SESSION_FILE" ]]; then
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      listed_workdir=$(extract_workdir "$line")
+      listed_task_id=$(extract_task_id "$line")
+      listed_session_id=$(printf '%s' "$line" | extract_session_id)
+      [[ "$listed_workdir" == "$workdir" ]] || continue
+      [[ -z "$task_id" || "$listed_task_id" == "$task_id" ]] || continue
+      if session_is_running_by_id "$listed_session_id"; then
+        listed_status="running"
+      else
+        listed_status="idle"
+      fi
+      echo "status=$listed_status task_id=$listed_task_id session_id=$listed_session_id workdir=$listed_workdir"
+      found=1
+    done < "$SESSION_FILE"
+  fi
+  if [[ "$found" -eq 0 ]]; then
+    if [[ -n "$task_id" ]]; then
+      echo "status=missing task_id=$task_id workdir=$workdir"
+    else
+      echo "status=missing workdir=$workdir"
+    fi
+  fi
+  exit 0
+fi
+
+if [[ ( "$resume" -eq 1 || "$status_only" -eq 1 ) && -z "$session_id" ]]; then
+  if [[ -f "$SESSION_FILE" ]]; then
+    session_line=$(latest_session_line)
+    if [[ -n "$session_line" ]]; then
+      session_id=$(printf '%s' "$session_line" | extract_session_id)
+    fi
+  fi
+  if [[ "$resume" -eq 1 && -z "$session_id" ]]; then
+    if [[ -n "$task_id" ]]; then
+      echo "error: no previous DeepSeek sidecar session found for workdir=${workdir} task_id=${task_id}" >&2
+    else
+      echo "error: no previous DeepSeek sidecar session found for workdir=${workdir}" >&2
+    fi
+    echo "  Run without --resume first to start a new session." >&2
+    exit 2
+  fi
+fi
+
+if [[ "$resume" -eq 0 && "$status_only" -eq 0 && -z "$session_id" && -n "$task_id" ]]; then
+  existing_line=$(latest_session_line)
+  if [[ -n "$existing_line" ]]; then
+    existing_session_id=$(printf '%s' "$existing_line" | extract_session_id)
+    echo "error: task id already has a DeepSeek sidecar session: task_id=${task_id} session_id=${existing_session_id} workdir=${workdir}" >&2
+    echo "  Use --resume --task-id ${task_id}, --session-id ${existing_session_id}, or choose a new --task-id." >&2
+    exit 2
+  fi
+fi
+
+if [[ -n "$session_id" && ! "$session_id" =~ ^[0-9A-Fa-f-]+$ ]]; then
+  echo "error: invalid session id: $session_id" >&2
+  exit 2
+fi
+
+session_workdir=""
+session_task_id="-"
+if [[ -n "$session_id" && -f "$SESSION_FILE" ]]; then
+  session_line=$(grep -F "session_id=${session_id}" "$SESSION_FILE" 2>/dev/null | tail -1 || true)
+  if [[ -n "$session_line" ]]; then
+    session_workdir=$(extract_workdir "$session_line")
+    session_task_id=$(extract_task_id "$session_line")
+  fi
+fi
+
+lock_dir=""
+if [[ -n "$session_id" ]]; then
+  lock_dir="$LOCK_ROOT/$session_id.lock"
+fi
+
+session_is_running() {
+  local pid=""
+  [[ -n "$lock_dir" && -d "$lock_dir" ]] || return 1
+  [[ -f "$lock_dir/pid" ]] && pid=$(cat "$lock_dir/pid" 2>/dev/null || true)
+  [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
+}
+
+remove_stale_lock() {
+  [[ -n "$lock_dir" && -d "$lock_dir" ]] || return 0
+  rm -f "$lock_dir/pid"
+  rmdir "$lock_dir" 2>/dev/null || true
+}
+
+if [[ "$status_only" -eq 1 ]]; then
+  if [[ -z "$session_id" ]]; then
+    if [[ -n "$task_id" ]]; then
+      echo "status=missing task_id=$task_id workdir=$workdir next=new-session"
+    else
+      echo "status=missing workdir=$workdir next=new-session"
+    fi
+  elif session_is_running; then
+    echo "status=running task_id=$session_task_id session_id=$session_id workdir=${session_workdir:-unknown} next=wait"
+  elif [[ -z "$session_workdir" ]]; then
+    remove_stale_lock
+    echo "status=untracked task_id=$session_task_id session_id=$session_id workdir=unknown next=resume-with---cd-or-new-session"
+  else
+    remove_stale_lock
+    echo "status=idle task_id=$session_task_id session_id=$session_id workdir=$session_workdir next=resume"
+  fi
+  exit 0
+fi
+
+# Locate Codex only for execution. CODEX_SUBAGENT_CODEX_BIN makes wrapper
+# behavior testable without spending a model request.
+if [[ -n "${CODEX_SUBAGENT_CODEX_BIN:-}" ]]; then
+  CODEX_BIN="$CODEX_SUBAGENT_CODEX_BIN"
+elif command -v codex &>/dev/null; then
+  CODEX_BIN="$(command -v codex)"
+elif [[ -x /Applications/Codex.app/Contents/Resources/codex ]]; then
+  CODEX_BIN="/Applications/Codex.app/Contents/Resources/codex"
+else
+  echo "error: could not find codex binary" >&2
+  exit 1
+fi
+if [[ ! -x "$CODEX_BIN" ]]; then
+  echo "error: codex binary is not executable: $CODEX_BIN" >&2
+  exit 1
+fi
+
+# ── pre-flight connectivity check
+
+if [[ "$doctor_check" -eq 1 && -z "$session_id" ]]; then
+  doctor_out=$("$CODEX_BIN" doctor -c profile="$profile" --json --summary 2>&1) || true
+  result=$(printf '%s' "$doctor_out" | parse_doctor 2>/dev/null) || result="parse_error"
+  if [[ "$result" != "ok" ]]; then
+    echo "error: connectivity check failed for profile '${profile}'" >&2
+    if [[ "$result" == "parse_error" ]]; then
+      printf '%s\n' "$doctor_out" >&2
+    else
+      printf '%s\n' "$result" >&2
+    fi
+    echo "  Use --no-doctor-check to skip, or --configure to set up the profile." >&2
+    exit 1
+  fi
+fi
+
+run_workdir="$workdir"
+if [[ -n "$session_id" ]]; then
+  if [[ -n "$session_workdir" ]]; then
+    run_workdir="$session_workdir"
+  fi
+  if [[ ! -d "$run_workdir" ]]; then
+    echo "error: session working directory does not exist: $run_workdir" >&2
+    exit 2
+  fi
+  if session_is_running; then
+    echo "error: session is already running: $session_id; use --status and wait before resuming" >&2
+    exit 3
+  fi
+  remove_stale_lock
+  if ! mkdir "$lock_dir" 2>/dev/null; then
+    echo "error: could not lock session: $session_id" >&2
+    exit 3
+  fi
+  echo "$$" > "$lock_dir/pid"
+  cmd=(
+    "$CODEX_BIN"
+    exec resume
+    --skip-git-repo-check
+    -c profile="$profile"
+    -c sandbox=danger-full-access
+    "$session_id"
+  )
+else
+  cmd=(
+    "$CODEX_BIN"
+    exec
+    --profile "$profile"
+    --skip-git-repo-check
+    --sandbox danger-full-access
+    -C "$workdir"
+  )
+fi
+if [[ ! -d "$run_workdir" ]]; then
+  echo "error: working directory does not exist: $run_workdir" >&2
+  exit 2
+fi
+if [[ "$json" -eq 1 ]]; then
+  cmd+=(--json)
+fi
+
+tmp_dir=$(mktemp -d /tmp/deepseek-sidecar.XXXXXX)
+tmp_stderr="$tmp_dir/stderr"
+stderr_pipe="$tmp_dir/stderr.pipe"
+mkfifo "$stderr_pipe"
+monitor_log=""
+monitor_done=""
+monitor_session=""
+stderr_pid=""
+
+write_visible_output() {
+  if [[ "$monitor_enabled" -eq 1 ]]; then
+    tee -a "$monitor_log"
+  else
+    cat
+  fi
+}
+
+filter_stderr() {
+  if [[ "$verbose_stderr" -eq 1 ]]; then
+    cat
+  else
+    sed -E \
+      -e '/WARN codex_protocol::openai_models: Model personality requested but model_messages is missing, falling back to base instructions\./d' \
+      -e '/WARN codex_core_skills::loader: ignoring interface\.icon_(small|large): icon path must not contain/d'
+  fi
+}
+
+if [[ "$monitor_enabled" -eq 1 ]]; then
+  monitor_log=$(mktemp /tmp/deepseek-sidecar-monitor.XXXXXX)
+  monitor_done="$monitor_log.done"
+  monitor_session="$monitor_log.session"
+  terminal_chat="${SCRIPT_DIR}/terminal-chat"
+  wrapper_entry="${SCRIPT_DIR}/codex-deepseek-sidecar"
+  if ! /usr/bin/osascript - "$monitor_log" "$monitor_done" "$monitor_session" "$terminal_chat" "$wrapper_entry" <<'OSA' >/dev/null 2>&1
+on run argv
+  set logFile to item 1 of argv
+  set doneFile to item 2 of argv
+  set sessionFile to item 3 of argv
+  set chatScript to item 4 of argv
+  set wrapperEntry to item 5 of argv
+  tell application "Terminal"
+    activate
+    do script quoted form of chatScript & " " & quoted form of logFile & " " & quoted form of doneFile & " " & quoted form of sessionFile & " " & quoted form of wrapperEntry
+  end tell
+end run
+OSA
+  then
+    echo "warning: could not open Terminal monitor; continuing without a visible window" >&2
+    monitor_enabled=0
+    rm -f "$monitor_log"
+    monitor_log=""
+    monitor_done=""
+    monitor_session=""
+  fi
+fi
+
+stream_stderr() {
+  tee "$tmp_stderr" | filter_stderr | write_visible_output >&2
+}
+
+cleanup() {
+  if [[ -n "$stderr_pid" ]] && kill -0 "$stderr_pid" 2>/dev/null; then
+    kill "$stderr_pid" 2>/dev/null || true
+    wait "$stderr_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$monitor_done" ]]; then
+    touch "$monitor_done"
+  fi
+  rm -f "$tmp_stderr" "$stderr_pipe"
+  rmdir "$tmp_dir" 2>/dev/null || true
+  if [[ -n "$lock_dir" ]]; then
+    remove_stale_lock
+  fi
+}
+trap cleanup EXIT
+
+stream_stderr < "$stderr_pipe" &
+stderr_pid=$!
+
+set +e
+if [[ ${#args[@]} -eq 1 && "${args[0]}" == "-" ]]; then
+  (cd "$run_workdir" && "${clean_env[@]}" "${cmd[@]}" -) 2>"$stderr_pipe" | write_visible_output
+  pipe_status=("${PIPESTATUS[@]}")
+  exit_code=${pipe_status[0]}
+else
+  printf '%s\n' "${args[*]}" | (cd "$run_workdir" && "${clean_env[@]}" "${cmd[@]}" -) 2>"$stderr_pipe" | write_visible_output
+  pipe_status=("${PIPESTATUS[@]}")
+  exit_code=${pipe_status[1]}
+fi
+wait "$stderr_pid"
+stderr_pid=""
+set -e
+
+if [[ -z "$session_id" ]]; then
+  new_sid=$(sed -n 's/.*session id: \([0-9a-f-]*\).*/\1/p' "$tmp_stderr" | head -1)
+  if [[ -n "$new_sid" ]]; then
+    if [[ -n "$task_id" ]]; then
+      echo "workdir=${workdir} task_id=${task_id} session_id=${new_sid}" >> "$SESSION_FILE"
+    else
+      echo "workdir=${workdir} session_id=${new_sid}" >> "$SESSION_FILE"
+    fi
+    if [[ -n "$monitor_session" ]]; then
+      printf '%s\n' "$new_sid" > "$monitor_session"
+    fi
+  fi
+elif [[ -n "$monitor_session" ]]; then
+  printf '%s\n' "$session_id" > "$monitor_session"
+fi
+
+exit "$exit_code"
