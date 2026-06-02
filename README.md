@@ -8,6 +8,30 @@ Run a DeepSeek-powered Codex sidecar next to your main Codex agent.
 
 This is a cost-effective agent-era workflow: premium reasoning coordinates the work, economical sidecars do the heavy lifting, and Codex provides the sandbox, tools, session persistence, and command execution layer.
 
+## The Cost Shape
+
+Agent work burns tokens in a very specific way: lots of file reading, log scanning, test output, repeated attempts, and long follow-up context. That is exactly the work you do not always want to run on the most expensive frontier model.
+
+Let the premium model be the **architect** and let DeepSeek sidecars be the **crew**.
+
+Prices below are per 1M tokens, checked on 2026-06-02 from the [OpenAI GPT-5.5 model page](https://developers.openai.com/api/docs/models/gpt-5.5/) and [DeepSeek pricing docs](https://api-docs.deepseek.com/quick_start/pricing). DeepSeek Pro input uses the cache-miss price for a conservative comparison.
+
+| Model | Best role in this workflow | Input | Output | Raw price gap vs GPT-5.5 |
+| ---- | ---- | ----: | ----: | ----: |
+| GPT-5.5 | Main brain: planning, judgment, synthesis | $5.00 | $30.00 | 1x |
+| DeepSeek V4 Pro | Strong worker: code review, debugging, implementation attempts | $0.435 | $0.87 | ~13x cheaper blended |
+| DeepSeek V4 Flash | Fast worker: search, logs, broad exploration, cheap parallel passes | $0.14 | $0.28 | ~39x cheaper blended |
+
+Example blended at `1M input + 200K output`:
+
+| Route | Approx cost | Token-cost reduction |
+| ---- | ----: | ----: |
+| All GPT-5.5 | $11.00 | baseline |
+| All DeepSeek V4 Pro worker tokens | $0.61 | ~94% |
+| All DeepSeek V4 Flash worker tokens | $0.20 | ~98% |
+
+In a real sidecar setup, GPT still spends tokens on coordination, review, and final decisions. That is the point: spend premium tokens where judgment matters, and move the repetitive worker-token budget to DeepSeek. For many agent workflows, that makes an **80-90% token-cost reduction** a realistic target without giving up Codex's harness.
+
 ## Why It Exists
 
 - **Use the right model for the right job**: GPT can stay focused on planning and synthesis while DeepSeek handles bounded worker tasks.

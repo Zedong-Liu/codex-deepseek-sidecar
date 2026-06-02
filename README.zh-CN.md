@@ -8,6 +8,30 @@
 
 这是一个非常有性价比的 agent 时代工作方式：昂贵的强模型负责协调，便宜的 sidecar 负责干活，Codex 提供沙箱、工具、持久 session 和命令执行层。
 
+## 成本形状
+
+Agent 工作有一个很明显的 token 消耗特点：大量读文件、扫日志、看测试输出、反复尝试、携带长上下文 follow-up。这些事情不一定都值得交给最贵的 frontier model。
+
+让高级模型做 **architect**，让 DeepSeek sidecar 做 **crew**。
+
+下面价格按每 1M tokens 计算，基于 2026-06-02 查询到的 [OpenAI GPT-5.5 model page](https://developers.openai.com/api/docs/models/gpt-5.5/) 和 [DeepSeek pricing docs](https://api-docs.deepseek.com/quick_start/pricing)。DeepSeek Pro 输入价格使用 cache-miss 价格，属于偏保守比较。
+
+| 模型 | 在这个工作流里的最佳角色 | 输入 | 输出 | 相比 GPT-5.5 的原始价差 |
+| ---- | ---- | ----: | ----: | ----: |
+| GPT-5.5 | 主大脑：规划、判断、综合结论 | $5.00 | $30.00 | 1x |
+| DeepSeek V4 Pro | 强工人：代码审查、调试、实现尝试 | $0.435 | $0.87 | 混合后约便宜 13x |
+| DeepSeek V4 Flash | 快工人：搜索、日志、广泛探索、廉价并行 pass | $0.14 | $0.28 | 混合后约便宜 39x |
+
+按 `1M input + 200K output` 粗略混合计算：
+
+| 路由方式 | 近似成本 | token 成本降低 |
+| ---- | ----: | ----: |
+| 全部使用 GPT-5.5 | $11.00 | baseline |
+| 工人 token 全部使用 DeepSeek V4 Pro | $0.61 | 约 94% |
+| 工人 token 全部使用 DeepSeek V4 Flash | $0.20 | 约 98% |
+
+真实 sidecar 工作流里，GPT 仍然会花 token 做协调、审查和最终决策。这正是这个模式的重点：把昂贵 token 花在判断力上，把重复性的 worker-token 预算迁移到 DeepSeek。对很多 agent 工作流来说，**80-90% 的 token cost save** 是一个现实目标，同时仍然保留 Codex harness。
+
 ## 为什么需要它
 
 - **把模型用在合适的位置**：GPT 专注于规划和综合判断，DeepSeek 处理边界清晰的工人任务。
