@@ -41,6 +41,37 @@ Run configuration once, not before every sidecar task:
 "<path-to-skill>/scripts/codex-deepseek-sidecar" --configure
 ```
 
+## When to Delegate
+
+Use a sidecar when the task is self-contained, can run in parallel without conflicting edits, and benefits from a cheaper worker reading or executing a lot of context. Good fits include:
+
+- Running long test suites or benchmarks while the main agent continues planning.
+- Inspecting long logs, traces, CI output, or benchmark output and returning only the relevant evidence.
+- Performing an independent read-only review or implementation attempt on a clearly bounded module.
+
+Example briefs:
+
+```text
+Task: Run the slow integration tests and identify the first real failure.
+Context: Work from the repository root. Use the existing test command from the README or package scripts.
+Expected: Report the command, pass/fail status, failing test names, and the smallest useful error excerpt.
+Constraints: Do not edit files.
+```
+
+```text
+Task: Analyze this long CI log and find the root cause.
+Context: The log is at /tmp/ci-output.log. Focus on the first failure, not cascading errors.
+Expected: Summarize the cause, cite exact log lines or snippets, and suggest the next verification command.
+Constraints: Do not edit files.
+```
+
+```text
+Task: Review the auth module for likely regressions.
+Context: Inspect src/auth and related tests only.
+Expected: Findings with file and line references, plus missing-test notes if relevant.
+Constraints: Read-only review; do not modify files.
+```
+
 ## Workflow
 
 Each execution opens a Terminal window that shows live task output, then becomes a `deepseek>` follow-up prompt. Type `/exit` to leave the session idle for later resume.
