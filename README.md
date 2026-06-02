@@ -4,25 +4,23 @@
 
 Run a DeepSeek-powered Codex sidecar next to your main Codex agent.
 
-`codex-deepseek-sidecar` is a Codex skill and shell wrapper for delegating bounded tasks to a DeepSeek-backed Codex CLI session. The pattern is simple: keep a high-end GPT model as the main brain, then hand off parallel research, review, debugging, log inspection, or implementation attempts to lower-cost but still capable DeepSeek workers, all inside the Codex harness.
+**No external proxy required. Bring your own DeepSeek key.**
 
-This is a cost-effective agent-era workflow: premium reasoning coordinates the work, economical sidecars do the heavy lifting, and Codex provides the sandbox, tools, session persistence, and command execution layer.
+`codex-deepseek-sidecar` is a Codex skill for delegating bounded tasks to DeepSeek-backed Codex CLI sessions. Keep a high-end GPT model as the main brain, then hand off parallel research, review, debugging, log inspection, or implementation attempts to lower-cost but still capable DeepSeek workers, all inside the Codex harness.
 
-It also includes a small Python proxy that bridges Codex's Responses API wire format to DeepSeek's Chat Completions API, so users do not need a full provider switcher just to get started.
+It includes a small Python proxy that bridges Codex's Responses API to DeepSeek's Chat Completions API, so a fresh machine only needs Python 3 and `DEEPSEEK_API_KEY`. If you already use VibeAround or another compatible provider, keep using it.
 
-## The Cost Shape
+If you are a human installing this: clone the repo as a Codex skill, then ask your Codex agent to use `codex-deepseek-sidecar`. The skill is written for agents, so Codex can configure the profile, start the proxy if needed, and launch the first sidecar in about five minutes.
 
-Agent work burns tokens in a very specific way: lots of file reading, log scanning, test output, repeated attempts, and long follow-up context. That is exactly the work you do not always want to run on the most expensive frontier model.
-
-Let the premium model be the **architect** and let DeepSeek sidecars be the **crew**.
+## Why It Works
 
 Prices below are per 1M tokens, checked on 2026-06-02 from the [OpenAI GPT-5.5 model page](https://developers.openai.com/api/docs/models/gpt-5.5/) and [DeepSeek pricing docs](https://api-docs.deepseek.com/quick_start/pricing). DeepSeek Pro input uses the cache-miss price for a conservative comparison.
 
-| Model | Best role in this workflow | Input | Output | Raw price gap vs GPT-5.5 |
+| Model | Best role | Input | Output | Raw price gap |
 | ---- | ---- | ----: | ----: | ----: |
 | GPT-5.5 | Main brain: planning, judgment, synthesis | $5.00 | $30.00 | 1x |
-| DeepSeek V4 Pro | Strong worker: code review, debugging, implementation attempts | $0.435 | $0.87 | ~13x cheaper blended |
-| DeepSeek V4 Flash | Fast worker: search, logs, broad exploration, cheap parallel passes | $0.14 | $0.28 | ~39x cheaper blended |
+| DeepSeek V4 Pro | Strong worker: review, debugging, implementation attempts | $0.435 | $0.87 | ~13x cheaper blended |
+| DeepSeek V4 Flash | Fast worker: logs, broad exploration, cheap parallel passes | $0.14 | $0.28 | ~39x cheaper blended |
 
 Example blended at `1M input + 200K output`:
 
@@ -32,16 +30,13 @@ Example blended at `1M input + 200K output`:
 | All DeepSeek V4 Pro worker tokens | $0.61 | ~94% |
 | All DeepSeek V4 Flash worker tokens | $0.20 | ~98% |
 
-In a real sidecar setup, GPT still spends tokens on coordination, review, and final decisions. That is the point: spend premium tokens where judgment matters, and move the repetitive worker-token budget to DeepSeek. For many agent workflows, that makes an **80-90% token-cost reduction** a realistic target without giving up Codex's harness.
-
-## Why It Exists
+GPT still spends tokens on coordination, review, and final decisions. That is the point: spend premium tokens where judgment matters, and move repetitive worker-token budget to DeepSeek. For many agent workflows, **80-90% token-cost reduction** is a realistic target without giving up Codex's harness.
 
 - **Use the right model for the right job**: GPT can stay focused on planning and synthesis while DeepSeek handles bounded worker tasks.
 - **Keep Codex's harness**: sidecars still run through Codex CLI, so they can inspect files, run commands, use persistent sessions, and report evidence.
 - **Parallelize safely**: name sidecar tasks with `--task-id`, list them, check status, and resume the right worker without guessing.
-- **Reduce cost without giving up intelligence**: delegate repetitive exploration, reviews, and verification to a cheaper model while keeping a stronger model in charge.
-- **Stay observable**: by default each run opens a Terminal monitor, then turns into an interactive follow-up prompt.
-- **Bring your own DeepSeek key**: the included `deepseek-responses-proxy` is a lightweight local bridge, not a full provider platform.
+- **No external proxy required**: the included `deepseek-responses-proxy` is a lightweight local bridge for Codex Responses requests.
+- **Stay observable**: each run can open a Terminal monitor, then turn into an interactive follow-up prompt.
 
 ## What It Does
 
@@ -53,17 +48,9 @@ In a real sidecar setup, GPT still spends tokens on coordination, review, and fi
 - Prevents concurrent resume of the same session with a per-session lock.
 - Keeps a compatibility entrypoint at `scripts/codex-deepseek-subagent`.
 
-## Requirements
+## Human Setup
 
-- macOS for the Terminal monitor window.
-- [Codex CLI](https://github.com/openai/codex) installed and authenticated.
-- Python 3.
-- A DeepSeek API key in `DEEPSEEK_API_KEY`.
-- A DeepSeek-compatible Codex profile, usually named `deepseek`. The `--configure` command can create one for the included local proxy.
-
-## Install
-
-Clone this repository as a Codex skill:
+Give this repository to Codex as a skill:
 
 ```bash
 git clone https://github.com/Zedong-Liu/codex-deepseek-sidecar.git \
@@ -72,23 +59,18 @@ cd ~/.codex/skills/codex-deepseek-sidecar
 chmod +x scripts/*
 ```
 
-Optional command shortcut:
+Then tell your Codex agent:
 
-```bash
-mkdir -p ~/.codex/bin
-ln -s ~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar \
-  ~/.codex/bin/codex-deepseek-sidecar
+```text
+Use the codex-deepseek-sidecar skill. I have a DeepSeek API key.
+Configure the local proxy/profile if needed, then launch a sidecar for this repo.
 ```
 
-Configure or verify the DeepSeek profile:
+Requirements: Codex CLI installed and authenticated, Python 3, and a DeepSeek API key. macOS is recommended for the Terminal monitor window.
 
-```bash
-~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar --configure
-```
+## Agent Setup
 
-## 5-Minute Setup
-
-Start the lightweight local proxy if you do not already have a DeepSeek-compatible Codex provider or local proxy:
+If there is no existing DeepSeek-compatible Codex provider, start the built-in local proxy:
 
 ```bash
 export DEEPSEEK_API_KEY="sk-..."
