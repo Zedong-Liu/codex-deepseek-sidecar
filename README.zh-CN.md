@@ -88,14 +88,20 @@ ln -s ~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar \
 
 ## 5 分钟启动
 
-启动轻量本地代理：
+如果你本地还没有 DeepSeek-compatible Codex provider 或其他本地代理，先启动这个轻量代理：
 
 ```bash
 export DEEPSEEK_API_KEY="sk-..."
 ~/.codex/skills/codex-deepseek-sidecar/scripts/deepseek-responses-proxy
 ```
 
-在另一个终端里配置 Codex：
+让它保持运行。再次启动前，可以先检查代理是否已经活着：
+
+```bash
+~/.codex/skills/codex-deepseek-sidecar/scripts/deepseek-responses-proxy --status
+```
+
+在另一个终端里配置 Codex。这个配置是一次性的，不要每次 sidecar 任务都重复配置：
 
 ```bash
 ~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar --configure
@@ -109,7 +115,7 @@ base_url = "http://127.0.0.1:12359/v1"
 wire_api = "responses"
 ```
 
-这个代理使用自己的端口，不复用 VibeAround 的端口。默认支持较大的请求体（`--max-body-mb 128`），避免长上下文 sidecar 因为代理 buffer 太小被卡住。
+这个代理使用自己的端口，不复用 VibeAround 的端口。默认支持较大的请求体（`--max-body-mb 128`），避免长上下文 sidecar 因为代理 buffer 太小被卡住。它会桥接 function tools，并对不支持的 Responses built-in tools 给出明确错误，而不是静默丢掉。
 
 ## 快速开始
 

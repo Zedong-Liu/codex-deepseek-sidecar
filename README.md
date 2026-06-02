@@ -88,14 +88,20 @@ Configure or verify the DeepSeek profile:
 
 ## 5-Minute Setup
 
-Start the lightweight local proxy:
+Start the lightweight local proxy if you do not already have a DeepSeek-compatible Codex provider or local proxy:
 
 ```bash
 export DEEPSEEK_API_KEY="sk-..."
 ~/.codex/skills/codex-deepseek-sidecar/scripts/deepseek-responses-proxy
 ```
 
-In another terminal, configure Codex for the proxy:
+Leave it running. Before starting another copy, check whether it is already alive:
+
+```bash
+~/.codex/skills/codex-deepseek-sidecar/scripts/deepseek-responses-proxy --status
+```
+
+In another terminal, configure Codex for the proxy. This is a one-time setup; do not repeat it for every sidecar task:
 
 ```bash
 ~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar --configure
@@ -109,7 +115,7 @@ base_url = "http://127.0.0.1:12359/v1"
 wire_api = "responses"
 ```
 
-The proxy listens on its own port instead of reusing VibeAround's port. It accepts large request bodies by default (`--max-body-mb 128`) so long-context sidecar runs are not capped by a small proxy buffer.
+The proxy listens on its own port instead of reusing VibeAround's port. It accepts large request bodies by default (`--max-body-mb 128`) so long-context sidecar runs are not capped by a small proxy buffer. It bridges function tools and rejects unsupported Responses built-in tools clearly instead of silently dropping them.
 
 ## Quick Start
 
