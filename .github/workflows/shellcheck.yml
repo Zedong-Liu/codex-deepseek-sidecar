@@ -14,6 +14,8 @@ jobs:
           bash -n scripts/codex-deepseek-sidecar
           bash -n scripts/codex-deepseek-subagent
           bash -n scripts/terminal-chat
+          python3 -m py_compile scripts/deepseek-responses-proxy
+          scripts/deepseek-responses-proxy --self-test
       - name: ShellCheck
         uses: ludeeus/action-shellcheck@master
         with:

@@ -25,7 +25,15 @@ ln -s ~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar \
 
 ## Prerequisites
 
-A working DeepSeek profile in `~/.codex/config.toml`. Run `--configure` once to create a default profile if needed, then verify connectivity with `codex doctor`.
+A working DeepSeek profile in `~/.codex/config.toml`. Run `--configure` once to create a default profile for the included local proxy if needed, then verify connectivity with `codex doctor`.
+
+Start the lightweight proxy first:
+
+```bash
+DEEPSEEK_API_KEY="sk-..." "<path-to-skill>/scripts/deepseek-responses-proxy"
+```
+
+The proxy listens on `127.0.0.1:12359` by default and bridges Codex Responses requests to DeepSeek Chat Completions. It defaults to a 128 MB request body limit for long-context sidecar runs.
 
 ```bash
 "<path-to-skill>/scripts/codex-deepseek-sidecar" --configure

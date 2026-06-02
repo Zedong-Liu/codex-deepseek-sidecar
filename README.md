@@ -8,6 +8,8 @@ Run a DeepSeek-powered Codex sidecar next to your main Codex agent.
 
 This is a cost-effective agent-era workflow: premium reasoning coordinates the work, economical sidecars do the heavy lifting, and Codex provides the sandbox, tools, session persistence, and command execution layer.
 
+It also includes a small Python proxy that bridges Codex's Responses API wire format to DeepSeek's Chat Completions API, so users do not need a full provider switcher just to get started.
+
 ## The Cost Shape
 
 Agent work burns tokens in a very specific way: lots of file reading, log scanning, test output, repeated attempts, and long follow-up context. That is exactly the work you do not always want to run on the most expensive frontier model.
@@ -39,10 +41,12 @@ In a real sidecar setup, GPT still spends tokens on coordination, review, and fi
 - **Parallelize safely**: name sidecar tasks with `--task-id`, list them, check status, and resume the right worker without guessing.
 - **Reduce cost without giving up intelligence**: delegate repetitive exploration, reviews, and verification to a cheaper model while keeping a stronger model in charge.
 - **Stay observable**: by default each run opens a Terminal monitor, then turns into an interactive follow-up prompt.
+- **Bring your own DeepSeek key**: the included `deepseek-responses-proxy` is a lightweight local bridge, not a full provider platform.
 
 ## What It Does
 
 - Starts DeepSeek-backed Codex CLI sidecar sessions.
+- Bridges Codex Responses requests to DeepSeek Chat Completions with a small Python stdlib proxy.
 - Records reusable session IDs by project and optional task ID.
 - Supports `--status`, `--list`, `--resume`, and direct `--session-id` recovery.
 - Runs children in a clean UTF-8 environment with explicit `--pass-env` forwarding.
@@ -53,8 +57,9 @@ In a real sidecar setup, GPT still spends tokens on coordination, review, and fi
 
 - macOS for the Terminal monitor window.
 - [Codex CLI](https://github.com/openai/codex) installed and authenticated.
-- A DeepSeek-compatible Codex profile, usually named `deepseek`.
-- Optional: VibeAround or another local/provider bridge if that is how your DeepSeek profile is routed.
+- Python 3.
+- A DeepSeek API key in `DEEPSEEK_API_KEY`.
+- A DeepSeek-compatible Codex profile, usually named `deepseek`. The `--configure` command can create one for the included local proxy.
 
 ## Install
 
@@ -80,6 +85,31 @@ Configure or verify the DeepSeek profile:
 ```bash
 ~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar --configure
 ```
+
+## 5-Minute Setup
+
+Start the lightweight local proxy:
+
+```bash
+export DEEPSEEK_API_KEY="sk-..."
+~/.codex/skills/codex-deepseek-sidecar/scripts/deepseek-responses-proxy
+```
+
+In another terminal, configure Codex for the proxy:
+
+```bash
+~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar --configure
+```
+
+The generated provider points Codex at:
+
+```toml
+[model_providers.deepseek]
+base_url = "http://127.0.0.1:12359/v1"
+wire_api = "responses"
+```
+
+The proxy listens on its own port instead of reusing VibeAround's port. It accepts large request bodies by default (`--max-body-mb 128`) so long-context sidecar runs are not capped by a small proxy buffer.
 
 ## Quick Start
 
@@ -161,6 +191,7 @@ Constraints: [read-only scope, or explicit permission to edit/run tests]
 ├── agents/openai.yaml
 ├── scripts/codex-deepseek-sidecar
 ├── scripts/codex-deepseek-subagent
+├── scripts/deepseek-responses-proxy
 └── scripts/terminal-chat
 ```
 

@@ -156,31 +156,46 @@ else:
 if [[ "$configure_only" -eq 1 ]]; then
   [[ ${#args[@]} -eq 0 ]] || { echo "error: --configure does not accept a prompt" >&2; exit 2; }
   CONFIG_TOML="${HOME}/.codex/config.toml"
-  if [[ -f "$CONFIG_TOML" ]] && grep -q "^\[profiles\.${profile}\]" "$CONFIG_TOML" 2>/dev/null; then
+  provider_exists=0
+  profile_exists=0
+  [[ -f "$CONFIG_TOML" ]] && grep -q "^\[profiles\.${profile}\]" "$CONFIG_TOML" 2>/dev/null && profile_exists=1
+  [[ -f "$CONFIG_TOML" ]] && grep -q "^\[model_providers\.${profile}\]" "$CONFIG_TOML" 2>/dev/null && provider_exists=1
+
+  if [[ "$profile_exists" -eq 1 ]]; then
     echo "Profile [profiles.${profile}] already exists."
   else
     echo "Profile [profiles.${profile}] not found in config.toml."
-    echo ""
-    echo "Choose your DeepSeek API style:"
-    echo "  1. VibeAround  - HTTP proxy on 127.0.0.1:12358"
-    echo "  2. CC switch    - config.toml provider switch"
-    echo ""
-    printf "Enter 1 or 2: "; IFS= read -r choice || true
     mkdir -p "$(dirname "$CONFIG_TOML")"
     {
       echo ""
       echo "[profiles.${profile}]"
-      echo 'model_provider = "deepseek"'
+      echo "model_provider = \"${profile}\""
       echo 'model = "deepseek-v4-pro"'
       echo 'model_reasoning_effort = "high"'
       echo 'model_context_window = 1048576'
       echo 'model_auto_compact_token_limit = 600000'
     } >> "$CONFIG_TOML"
     echo "Wrote [profiles.${profile}] to config.toml."
-    [[ "${choice:-}" == "2" ]] && echo "Ensure CC switch is configured for DeepSeek, then restart Codex." \
-      || echo "Ensure VibeAround proxy is running on 127.0.0.1:12358, then restart Codex."
+  fi
+
+  if [[ "$provider_exists" -eq 1 ]]; then
+    echo "Provider [model_providers.${profile}] already exists."
+  else
+    mkdir -p "$(dirname "$CONFIG_TOML")"
+    {
+      echo ""
+      echo "[model_providers.${profile}]"
+      echo 'name = "DeepSeek via codex-deepseek-sidecar"'
+      echo 'base_url = "http://127.0.0.1:12359/v1"'
+      echo 'wire_api = "responses"'
+      echo 'supports_websockets = false'
+    } >> "$CONFIG_TOML"
+    echo "Wrote [model_providers.${profile}] to config.toml."
     echo ""
   fi
+  echo "Ensure the local proxy is running first:"
+  echo "  DEEPSEEK_API_KEY=... scripts/deepseek-responses-proxy"
+  echo ""
   echo "Running connectivity check..."
   command -v codex &>/dev/null || { echo "error: codex not found in PATH" >&2; exit 1; }
   doctor_out=$(codex doctor -c profile="$profile" --json --summary 2>&1) || true
