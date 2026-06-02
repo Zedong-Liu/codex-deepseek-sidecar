@@ -539,6 +539,7 @@ stream_stderr() {
   tee "$tmp_stderr" | filter_stderr | write_visible_output >&2
 }
 
+# shellcheck disable=SC2329
 cleanup() {
   if [[ -n "$stderr_pid" ]] && kill -0 "$stderr_pid" 2>/dev/null; then
     kill "$stderr_pid" 2>/dev/null || true
