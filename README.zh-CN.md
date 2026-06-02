@@ -115,7 +115,7 @@ base_url = "http://127.0.0.1:12359/v1"
 wire_api = "responses"
 ```
 
-这个代理使用自己的端口，不复用 VibeAround 的端口。默认支持较大的请求体（`--max-body-mb 128`），避免长上下文 sidecar 因为代理 buffer 太小被卡住。它会桥接 function tools，并对不支持的 Responses built-in tools 给出明确错误，而不是静默丢掉。
+这个代理使用自己的端口，不复用 VibeAround 的端口。默认支持较大的请求体（`--max-body-mb 128`），避免长上下文 sidecar 因为代理 buffer 太小被卡住。它会桥接 function tools，并忽略 Codex 默认附带但 DeepSeek Chat 不支持的 Responses built-in tools；如果请求明确要求某个不支持的 built-in tool，则返回明确错误。
 
 ## 快速开始
 

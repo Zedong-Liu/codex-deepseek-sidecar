@@ -142,12 +142,10 @@ def response_tools_to_chat_tools(tools: Any) -> list[dict[str, Any]] | None:
     if not isinstance(tools, list) or not tools:
         return None
     chat_tools: list[dict[str, Any]] = []
-    unsupported: list[str] = []
     for tool in tools:
         if not isinstance(tool, dict):
             continue
         if tool.get("type") != "function":
-            unsupported.append(str(tool.get("type") or "unknown"))
             continue
         function = tool.get("function")
         if isinstance(function, dict):
@@ -170,12 +168,6 @@ def response_tools_to_chat_tools(tools: Any) -> list[dict[str, Any]] | None:
         if strict is not None:
             chat_function["strict"] = bool(strict)
         chat_tools.append({"type": "function", "function": chat_function})
-    if unsupported:
-        names = ", ".join(sorted(set(unsupported)))
-        raise ProxyRequestError(
-            f"unsupported Responses built-in tool(s): {names}. "
-            "deepseek-responses-proxy only bridges function tools."
-        )
     return chat_tools or None
 
 
@@ -216,6 +208,27 @@ def tool_choice_to_chat(choice: Any) -> Any:
     return "auto"
 
 
+def unsupported_required_tool_choice(choice: Any, tools: Any) -> str | None:
+    if not isinstance(choice, dict):
+        return None
+    if choice.get("type") == "allowed_tools":
+        return None
+    choice_type = str(choice.get("type") or "")
+    if choice_type == "function":
+        return None
+    requested = str(choice.get("name") or choice_type or "unknown")
+    if requested in ("auto", "none", "required"):
+        return None
+    tool_types: set[str] = set()
+    if isinstance(tools, list):
+        for tool in tools:
+            if isinstance(tool, dict):
+                tool_types.add(str(tool.get("type") or ""))
+    if requested in tool_types or choice_type:
+        return requested
+    return None
+
+
 def responses_to_chat(payload: dict[str, Any]) -> dict[str, Any]:
     chat: dict[str, Any] = {
         "model": payload.get("model", "deepseek-v4-pro"),
@@ -237,7 +250,17 @@ def responses_to_chat(payload: dict[str, Any]) -> dict[str, Any]:
         chat["max_tokens"] = payload["max_output_tokens"]
     elif "max_tokens" in payload:
         chat["max_tokens"] = payload["max_tokens"]
-    tools = filter_allowed_tools(response_tools_to_chat_tools(payload.get("tools")), payload.get("tool_choice"))
+    required_unsupported = unsupported_required_tool_choice(
+        payload.get("tool_choice"), payload.get("tools")
+    )
+    if required_unsupported:
+        raise ProxyRequestError(
+            f"tool_choice requires unsupported Responses tool: {required_unsupported}. "
+            "deepseek-responses-proxy only bridges function tools."
+        )
+    tools = filter_allowed_tools(
+        response_tools_to_chat_tools(payload.get("tools")), payload.get("tool_choice")
+    )
     if tools:
         chat["tools"] = tools
         chat["tool_choice"] = tool_choice_to_chat(payload.get("tool_choice", "auto"))
@@ -648,6 +671,7 @@ def self_test() -> int:
             {"type": "function_call_output", "call_id": "call_1", "output": "ok"},
         ],
         "tools": [
+            {"type": "web_search_preview"},
             {
                 "type": "function",
                 "name": "shell",
@@ -680,9 +704,15 @@ def self_test() -> int:
     assert chat["tools"][0]["function"]["strict"] is True
     assert chat["parallel_tool_calls"] is True
     assert chat["max_tokens"] == 100
+    assert "tools" not in responses_to_chat({"tools": [{"type": "web_search_preview"}]})
     try:
-        responses_to_chat({"tools": [{"type": "web_search_preview"}]})
-        raise AssertionError("unsupported built-in tool was not rejected")
+        responses_to_chat(
+            {
+                "tools": [{"type": "web_search_preview"}],
+                "tool_choice": {"type": "web_search_preview"},
+            }
+        )
+        raise AssertionError("required unsupported built-in tool was not rejected")
     except ProxyRequestError:
         pass
     response = chat_to_response(

@@ -115,7 +115,7 @@ base_url = "http://127.0.0.1:12359/v1"
 wire_api = "responses"
 ```
 
-The proxy listens on its own port instead of reusing VibeAround's port. It accepts large request bodies by default (`--max-body-mb 128`) so long-context sidecar runs are not capped by a small proxy buffer. It bridges function tools and rejects unsupported Responses built-in tools clearly instead of silently dropping them.
+The proxy listens on its own port instead of reusing VibeAround's port. It accepts large request bodies by default (`--max-body-mb 128`) so long-context sidecar runs are not capped by a small proxy buffer. It bridges function tools and ignores unsupported Responses built-in tools that Codex may attach by default; if a request explicitly requires an unsupported built-in tool, it returns a clear error.
 
 ## Quick Start
 
