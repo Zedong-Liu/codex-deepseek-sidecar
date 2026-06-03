@@ -2,9 +2,13 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
+<p align="center">
+  <img src="assets/codex-deepseek-sidecar-logo.png" alt="codex-deepseek-sidecar cyber logo" width="360">
+</p>
+
 用一句 prompt，让 Codex 自己启动 DeepSeek sidecar agents。
 
-**不需要额外代理。带上你自己的 DeepSeek key，剩下交给 Codex。**
+**不需要额外代理。带上你自己的 DeepSeek key，剩下交给 Codex。(￣▽￣)ノ**
 
 `codex-deepseek-sidecar` 是一个 Codex skill，让你的 Codex 主 agent 可以启动更便宜的 DeepSeek 工人 agent，去处理边界清晰的 side task：长测试、日志分析、大范围代码探索、独立 review、实现尝试。
 
@@ -34,15 +38,17 @@
 ```
 
 ```text
-用一个 DeepSeek sidecar 对 auth 模块做一次独立只读 review。
+你自己判断什么时候把这件事拆给 DeepSeek sidecars。适合长测试、日志分析、大范围探索时就自动分派、组织结果，最后给我一个综合方案。
 ```
 
 ## 为什么用户会想用
 
+- **大幅降低 worker token 成本**：把重复读文件、看日志、跑测试、大范围探索从昂贵 GPT token 迁移到 DeepSeek worker token。很多工作流可以瞄准 **80-90% 更低 token 成本**。
 - **一句 prompt，agent 自己接管**：Codex 安装、配置、启动、分派、检查、恢复、汇总。
+- **支持 resume，不用重来**：sidecar session 会持久保存，长测试、被打断的调查、后续追问都可以恢复到正确工人。
 - **不需要外部代理**：仓库内置一个小型 Python 代理，把 Codex Responses API 桥接到 DeepSeek Chat Completions。
 - **Bring your own DeepSeek key**：不需要托管中间层。
-- **GPT 仍然做主脑**：昂贵模型负责规划、判断、综合；DeepSeek 负责边界清晰的工人任务。
+- **GPT 仍然做主脑**：昂贵模型负责规划、判断、综合；DeepSeek 负责边界清晰的工人任务。(ง •̀_•́)ง
 - **继续使用 Codex harness**：sidecar 仍然具备 Codex 的文件访问、命令执行、session 和证据汇报能力。
 
 ## 成本形状

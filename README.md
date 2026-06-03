@@ -2,9 +2,13 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
+<p align="center">
+  <img src="assets/codex-deepseek-sidecar-logo.png" alt="codex-deepseek-sidecar cyber logo" width="360">
+</p>
+
 Launch DeepSeek sidecar agents from Codex with one prompt.
 
-**No external proxy required. Bring your own DeepSeek key. Codex handles the rest.**
+**No external proxy required. Bring your own DeepSeek key. Codex handles the rest. (￣▽￣)ノ**
 
 `codex-deepseek-sidecar` is a Codex skill that lets your main Codex agent start cheaper DeepSeek-backed worker agents for bounded side tasks: long tests, log analysis, broad code exploration, independent review, or implementation attempts.
 
@@ -34,15 +38,17 @@ Use a DeepSeek sidecar to analyze this CI log and summarize the real failure.
 ```
 
 ```text
-Use a DeepSeek sidecar for an independent read-only review of the auth module.
+You decide when to split this work into DeepSeek sidecars. Use them for long tests, log analysis, or broad exploration, organize the results, and give me one final plan.
 ```
 
 ## Why People Want It
 
+- **Spend far less on worker tokens**: move repetitive file reading, logs, tests, and broad exploration from premium GPT tokens to DeepSeek worker tokens. Many workflows can target **80-90% lower token cost**.
 - **One prompt, agent does the wiring**: Codex installs, configures, starts, assigns, checks, resumes, and summarizes.
+- **Resume instead of restarting**: sidecar sessions persist, so Codex can continue the right worker after a long test, interrupted investigation, or follow-up task.
 - **No external proxy required**: the repo includes a small Python proxy from Codex Responses API to DeepSeek Chat Completions.
 - **Bring your own DeepSeek key**: no hosted middle layer is required.
-- **GPT stays in charge**: the expensive model plans, judges, and synthesizes; DeepSeek handles bounded worker tasks.
+- **GPT stays in charge**: the expensive model plans, judges, and synthesizes; DeepSeek handles bounded worker tasks. (ง •̀_•́)ง
 - **Codex harness stays intact**: sidecars still get Codex file access, command execution, sessions, and evidence-based reporting.
 
 ## Cost Shape
