@@ -8,7 +8,7 @@
 
 用一句 prompt，让 Codex 自己启动 DeepSeek sidecar agents。
 
-**不需要额外代理。带上你自己的 DeepSeek key，剩下交给 Codex。(￣▽￣)ノ**
+**不需要额外代理。带上你自己的 DeepSeek key，剩下交给 Codex。🚀**
 
 `codex-deepseek-sidecar` 是一个 Codex skill，让你的 Codex 主 agent 可以启动更便宜的 DeepSeek 工人 agent，去处理边界清晰的 side task：长测试、日志分析、大范围代码探索、独立 review、实现尝试。
 
@@ -48,7 +48,7 @@
 - **支持 resume，不用重来**：sidecar session 会持久保存，长测试、被打断的调查、后续追问都可以恢复到正确工人。
 - **不需要外部代理**：仓库内置一个小型 Python 代理，把 Codex Responses API 桥接到 DeepSeek Chat Completions。
 - **Bring your own DeepSeek key**：不需要托管中间层。
-- **GPT 仍然做主脑**：昂贵模型负责规划、判断、综合；DeepSeek 负责边界清晰的工人任务。(ง •̀_•́)ง
+- **GPT 仍然做主脑**：昂贵模型负责规划、判断、综合；DeepSeek 负责边界清晰的工人任务。⚡️
 - **继续使用 Codex harness**：sidecar 仍然具备 Codex 的文件访问、命令执行、session 和证据汇报能力。
 
 ## 成本形状
