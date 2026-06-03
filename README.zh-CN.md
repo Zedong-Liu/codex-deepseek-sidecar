@@ -3,7 +3,7 @@
 [English](README.md) | [中文](README.zh-CN.md)
 
 <p align="center">
-  <img src="assets/codex-deepseek-sidecar-logo.png" alt="codex-deepseek-sidecar pixel logo" width="96">
+  <img src="assets/codex-deepseek-sidecar-logo.png" alt="codex-deepseek-sidecar pixel logo" width="106">
 </p>
 
 用一句 prompt，让 Codex 自己启动 DeepSeek sidecar agents。
@@ -44,14 +44,11 @@
 ## ✨ 为什么用户会想用
 
 - 💸 **大幅降低 worker token 成本**：把重复读文件、看日志、跑测试、大范围探索从昂贵 GPT token 迁移到 DeepSeek worker token。很多工作流可以瞄准 **80-90% 更低 token 成本**。
-- 🪄 **一句 prompt，agent 自己接管**：Codex 安装、配置、启动、分派、检查、恢复、汇总。
-- 🔁 **支持 resume，不用重来**：sidecar session 会持久保存，长测试、被打断的调查、后续追问都可以恢复到正确工人。
-- 🔌 **不需要外部代理**：仓库内置一个小型 Python 代理，把 Codex Responses API 桥接到 DeepSeek Chat Completions。
-- 🔑 **Bring your own DeepSeek key**：不需要托管中间层。
-- 🧠 **GPT 仍然做主脑**：昂贵模型负责规划、判断、综合；DeepSeek 负责边界清晰的工人任务。
-- 🛠️ **继续使用 Codex harness**：sidecar 仍然具备 Codex 的文件访问、命令执行、session 和证据汇报能力。
+- **不需要外部代理**：仓库内置一个小型 Python 代理，把 Codex Responses API 桥接到 DeepSeek Chat Completions。
+- **GPT 仍然做主脑**：昂贵模型负责规划、判断、综合；DeepSeek 负责边界清晰的工人任务。
+- **继续使用 Codex harness**：sidecar 仍然具备 Codex 的文件访问、命令执行、session 和证据汇报能力。
 
-## 💸 成本形状
+## 💸 成本节省估算
 
 下面价格按每 1M tokens 计算，基于 2026-06-02 查询到的 [OpenAI GPT-5.5 model page](https://developers.openai.com/api/docs/models/gpt-5.5/) 和 [DeepSeek pricing docs](https://api-docs.deepseek.com/quick_start/pricing)。DeepSeek Pro 输入价格使用 cache-miss 价格，属于偏保守比较。
 
