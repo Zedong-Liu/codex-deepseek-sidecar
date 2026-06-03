@@ -2,181 +2,87 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-Run a DeepSeek-powered Codex sidecar next to your main Codex agent.
+Launch DeepSeek sidecar agents from Codex with one prompt.
 
-**No external proxy required. Bring your own DeepSeek key.**
+**No external proxy required. Bring your own DeepSeek key. Codex handles the rest.**
 
-`codex-deepseek-sidecar` is a Codex skill for delegating bounded tasks to DeepSeek-backed Codex CLI sessions. Keep a high-end GPT model as the main brain, then hand off parallel research, review, debugging, log inspection, or implementation attempts to lower-cost but still capable DeepSeek workers, all inside the Codex harness.
+`codex-deepseek-sidecar` is a Codex skill that lets your main Codex agent start cheaper DeepSeek-backed worker agents for bounded side tasks: long tests, log analysis, broad code exploration, independent review, or implementation attempts.
 
-It includes a small Python proxy that bridges Codex's Responses API to DeepSeek's Chat Completions API, so a fresh machine only needs Python 3 and `DEEPSEEK_API_KEY`. If you already use VibeAround or another compatible provider, keep using it.
+The point is simple: keep a premium GPT model as the main brain, let DeepSeek workers do the repetitive token-heavy work, and keep everything inside the Codex harness.
 
-If you are a human installing this: clone the repo as a Codex skill, then ask your Codex agent to use `codex-deepseek-sidecar`. The skill is written for agents, so Codex can configure the profile, start the proxy if needed, and launch the first sidecar in about five minutes.
+## One-Prompt Setup
 
-## Why It Works
+Give Codex this repository URL and this prompt:
+
+```text
+Install and use https://github.com/Zedong-Liu/codex-deepseek-sidecar.
+I have a DeepSeek API key; ask me for it if it is not already configured.
+Configure the local proxy/profile if needed.
+Then start a DeepSeek sidecar for this repo and use it for suitable long-running or log-heavy tasks.
+```
+
+That is the intended human workflow. You do not need to learn the sidecar flags, session IDs, or proxy commands. The skill is written for Codex to read and operate. On a fresh machine with Codex CLI, Python 3, and a DeepSeek key, Codex should be able to install the skill, configure the built-in proxy, and launch the first sidecar in about five minutes.
+
+After setup, use natural prompts:
+
+```text
+Use a DeepSeek sidecar to run the slow tests while you inspect the code.
+```
+
+```text
+Use a DeepSeek sidecar to analyze this CI log and summarize the real failure.
+```
+
+```text
+Use a DeepSeek sidecar for an independent read-only review of the auth module.
+```
+
+## Why People Want It
+
+- **One prompt, agent does the wiring**: Codex installs, configures, starts, assigns, checks, resumes, and summarizes.
+- **No external proxy required**: the repo includes a small Python proxy from Codex Responses API to DeepSeek Chat Completions.
+- **Bring your own DeepSeek key**: no hosted middle layer is required.
+- **GPT stays in charge**: the expensive model plans, judges, and synthesizes; DeepSeek handles bounded worker tasks.
+- **Codex harness stays intact**: sidecars still get Codex file access, command execution, sessions, and evidence-based reporting.
+
+## Cost Shape
 
 Prices below are per 1M tokens, checked on 2026-06-02 from the [OpenAI GPT-5.5 model page](https://developers.openai.com/api/docs/models/gpt-5.5/) and [DeepSeek pricing docs](https://api-docs.deepseek.com/quick_start/pricing). DeepSeek Pro input uses the cache-miss price for a conservative comparison.
 
-| Model | Best role | Input | Output | Raw price gap |
-| ---- | ---- | ----: | ----: | ----: |
-| GPT-5.5 | Main brain: planning, judgment, synthesis | $5.00 | $30.00 | 1x |
-| DeepSeek V4 Pro | Strong worker: review, debugging, implementation attempts | $0.435 | $0.87 | ~13x cheaper blended |
-| DeepSeek V4 Flash | Fast worker: logs, broad exploration, cheap parallel passes | $0.14 | $0.28 | ~39x cheaper blended |
+| Model | Best role | Input | Output |
+| ---- | ---- | ----: | ----: |
+| GPT-5.5 | Main brain: planning, judgment, synthesis | $5.00 | $30.00 |
+| DeepSeek V4 Pro | Strong worker: review, debugging, implementation attempts | $0.435 | $0.87 |
+| DeepSeek V4 Flash | Fast worker: logs, broad exploration, cheap parallel passes | $0.14 | $0.28 |
 
-Example blended at `1M input + 200K output`:
+Example at `1M input + 200K output`:
 
 | Route | Approx cost | Token-cost reduction |
 | ---- | ----: | ----: |
 | All GPT-5.5 | $11.00 | baseline |
-| All DeepSeek V4 Pro worker tokens | $0.61 | ~94% |
-| All DeepSeek V4 Flash worker tokens | $0.20 | ~98% |
+| DeepSeek V4 Pro worker tokens | $0.61 | ~94% |
+| DeepSeek V4 Flash worker tokens | $0.20 | ~98% |
 
-GPT still spends tokens on coordination, review, and final decisions. That is the point: spend premium tokens where judgment matters, and move repetitive worker-token budget to DeepSeek. For many agent workflows, **80-90% token-cost reduction** is a realistic target without giving up Codex's harness.
+In real use, GPT still spends tokens coordinating and reviewing. That is the design: spend premium tokens where judgment matters and move repetitive worker-token budget to DeepSeek. For many agent workflows, **80-90% token-cost reduction** is a realistic target.
 
-- **Use the right model for the right job**: GPT can stay focused on planning and synthesis while DeepSeek handles bounded worker tasks.
-- **Keep Codex's harness**: sidecars still run through Codex CLI, so they can inspect files, run commands, use persistent sessions, and report evidence.
-- **Parallelize safely**: name sidecar tasks with `--task-id`, list them, check status, and resume the right worker without guessing.
-- **No external proxy required**: the included `deepseek-responses-proxy` is a lightweight local bridge for Codex Responses requests.
-- **Stay observable**: each run can open a Terminal monitor, then turn into an interactive follow-up prompt.
+## What Codex Does Behind the Scenes
 
-## What It Does
+When asked to use this skill, Codex can:
 
-- Starts DeepSeek-backed Codex CLI sidecar sessions.
-- Bridges Codex Responses requests to DeepSeek Chat Completions with a small Python stdlib proxy.
-- Records reusable session IDs by project and optional task ID.
-- Supports `--status`, `--list`, `--resume`, and direct `--session-id` recovery.
-- Runs children in a clean UTF-8 environment with explicit `--pass-env` forwarding.
-- Prevents concurrent resume of the same session with a per-session lock.
-- Keeps a compatibility entrypoint at `scripts/codex-deepseek-subagent`.
+- Install the repository as a Codex skill.
+- Start the built-in lightweight proxy if no compatible DeepSeek provider exists.
+- Configure a Codex profile once, without repeating setup for every task.
+- Launch DeepSeek sidecars for self-contained tasks.
+- Track task IDs and sessions so follow-ups resume the right worker.
+- Collect sidecar findings and synthesize them into the main answer.
 
-## Human Setup
+The operational details are intentionally kept out of this human README. Agent-facing instructions live in [SKILL.md](SKILL.md).
 
-Give this repository to Codex as a skill:
+## Built-In Proxy
 
-```bash
-git clone https://github.com/Zedong-Liu/codex-deepseek-sidecar.git \
-  ~/.codex/skills/codex-deepseek-sidecar
-cd ~/.codex/skills/codex-deepseek-sidecar
-chmod +x scripts/*
-```
+The included `deepseek-responses-proxy` is intentionally small: Python stdlib only, local-only by default, and designed for large Codex request bodies. It bridges function tools and ignores unsupported Responses built-in tools that Codex may attach by default. If a request explicitly requires an unsupported built-in tool, it returns a clear error.
 
-Then tell your Codex agent:
-
-```text
-Use the codex-deepseek-sidecar skill. I have a DeepSeek API key.
-Configure the local proxy/profile if needed, then launch a sidecar for this repo.
-```
-
-Requirements: Codex CLI installed and authenticated, Python 3, and a DeepSeek API key. macOS is recommended for the Terminal monitor window.
-
-## Agent Setup
-
-If there is no existing DeepSeek-compatible Codex provider, start the built-in local proxy:
-
-```bash
-export DEEPSEEK_API_KEY="sk-..."
-~/.codex/skills/codex-deepseek-sidecar/scripts/deepseek-responses-proxy
-```
-
-Leave it running. Before starting another copy, check whether it is already alive:
-
-```bash
-~/.codex/skills/codex-deepseek-sidecar/scripts/deepseek-responses-proxy --status
-```
-
-In another terminal, configure Codex for the proxy. This is a one-time setup; do not repeat it for every sidecar task:
-
-```bash
-~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar --configure
-```
-
-If your existing `deepseek` profile already belongs to VibeAround or another provider, keep it untouched and create a separate built-in-proxy profile instead:
-
-```bash
-~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar \
-  --profile deepseek-sidecar --configure
-```
-
-The generated provider points Codex at:
-
-```toml
-[model_providers.deepseek]
-base_url = "http://127.0.0.1:12359/v1"
-wire_api = "responses"
-```
-
-The proxy listens on its own port instead of reusing VibeAround's port. It accepts large request bodies by default (`--max-body-mb 128`) so long-context sidecar runs are not capped by a small proxy buffer. It bridges function tools and ignores unsupported Responses built-in tools that Codex may attach by default; if a request explicitly requires an unsupported built-in tool, it returns a clear error.
-
-## Quick Start
-
-Delegate one task:
-
-```bash
-PROJECT="/absolute/path/to/project"
-
-~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar \
-  --cd "$PROJECT" \
-  --task-id review-auth \
-  "Review the auth module. Report findings with file and line references. Do not edit files."
-```
-
-Check the worker:
-
-```bash
-~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar \
-  --cd "$PROJECT" --task-id review-auth --status
-```
-
-List sidecars for a project:
-
-```bash
-~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar \
-  --cd "$PROJECT" --list
-```
-
-Resume the named worker:
-
-```bash
-~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar \
-  --cd "$PROJECT" --task-id review-auth --resume \
-  "Continue from your previous findings and verify the highest-risk issue."
-```
-
-## Organizer Pattern
-
-This project intentionally stays small. It does not try to teach the main agent how to be an organizer. The calling agent remains responsible for task decomposition, permissions, conflict management, and synthesis.
-
-Recommended parallel workflow:
-
-1. Give each worker a stable `--task-id`, such as `review-auth`, `inspect-tests`, or `bench-sro`.
-2. Make prompts self-contained: task, context, expected output, and whether edits are allowed.
-3. Use `--list` and `--status` before follow-ups.
-4. Resume by `--task-id` for normal operation.
-5. Use `--session-id` only as a recovery escape hatch.
-
-## Flags
-
-| Flag | Purpose |
-| ---- | ------- |
-| `--cd DIR` | Project directory for session tracking. |
-| `--task-id NAME` | Name a sidecar task within `--cd DIR` for status/resume lookup. |
-| `--resume`, `-r` | Continue a recorded session. With `--task-id`, resumes that named task. |
-| `--session-id UUID` | Resume a specific Codex session directly. Useful for recovery. |
-| `--status` | Report `running`, `idle`, `missing`, or `untracked`. No model request. |
-| `--list` | List recorded sidecar sessions for `--cd DIR`. No model request. |
-| `--no-monitor` | Skip the Terminal monitor window. Useful for automation. |
-| `--pass-env NAME` | Pass one UTF-8 environment variable into the isolated child. Repeatable. |
-| `--profile NAME` | Use a non-default Codex profile. Default: `deepseek`. |
-| `--json` | Request Codex JSONL event output. |
-| `--no-doctor-check` | Skip the pre-flight `codex doctor` check. |
-
-## Prompt Shape
-
-```text
-Task: [concrete, bounded goal]
-Context: [paths, error snippet, constraints]
-Expected: [conclusion, evidence, patch/test references if code was edited]
-Constraints: [read-only scope, or explicit permission to edit/run tests]
-```
+If you already use VibeAround or another compatible provider, Codex can keep using that instead.
 
 ## Repository Layout
 
