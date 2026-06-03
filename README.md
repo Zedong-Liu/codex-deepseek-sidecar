@@ -44,7 +44,6 @@ You decide when to split this work into DeepSeek sidecars. Use them for long tes
 ## ✨ Why People Want It
 
 - **Spend far less on worker tokens**: move repetitive file reading, logs, tests, and broad exploration from premium GPT tokens to DeepSeek worker tokens. Many workflows can target **80-90% lower token cost**.
-- **Resume instead of restarting**: sidecar sessions persist, so Codex can continue the right worker after a long test, interrupted investigation, or follow-up task.
 - **No external proxy required**: the repo includes a small Python proxy from Codex Responses API to DeepSeek Chat Completions.
 - **GPT stays in charge**: the expensive model plans, judges, and synthesizes; DeepSeek handles bounded worker tasks.
 - **Codex harness stays intact**: sidecars still get Codex file access, command execution, sessions, and evidence-based reporting.
