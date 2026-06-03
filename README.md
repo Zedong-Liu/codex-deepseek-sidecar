@@ -3,7 +3,7 @@
 [English](README.md) | [中文](README.zh-CN.md)
 
 <p align="center">
-  <img src="assets/codex-deepseek-sidecar-logo.png" alt="codex-deepseek-sidecar cyber logo" width="360">
+  <img src="assets/codex-deepseek-sidecar-logo.png" alt="codex-deepseek-sidecar pixel logo" width="96">
 </p>
 
 Launch DeepSeek sidecar agents from Codex with one prompt.
@@ -14,7 +14,7 @@ Launch DeepSeek sidecar agents from Codex with one prompt.
 
 The point is simple: keep a premium GPT model as the main brain, let DeepSeek workers do the repetitive token-heavy work, and keep everything inside the Codex harness.
 
-## One-Prompt Setup
+## 🚀 One-Prompt Setup
 
 Give Codex this repository URL and this prompt:
 
@@ -41,17 +41,17 @@ Use a DeepSeek sidecar to analyze this CI log and summarize the real failure.
 You decide when to split this work into DeepSeek sidecars. Use them for long tests, log analysis, or broad exploration, organize the results, and give me one final plan.
 ```
 
-## Why People Want It
+## ✨ Why People Want It
 
-- **Spend far less on worker tokens**: move repetitive file reading, logs, tests, and broad exploration from premium GPT tokens to DeepSeek worker tokens. Many workflows can target **80-90% lower token cost**.
-- **One prompt, agent does the wiring**: Codex installs, configures, starts, assigns, checks, resumes, and summarizes.
-- **Resume instead of restarting**: sidecar sessions persist, so Codex can continue the right worker after a long test, interrupted investigation, or follow-up task.
-- **No external proxy required**: the repo includes a small Python proxy from Codex Responses API to DeepSeek Chat Completions.
-- **Bring your own DeepSeek key**: no hosted middle layer is required.
-- **GPT stays in charge**: the expensive model plans, judges, and synthesizes; DeepSeek handles bounded worker tasks. ⚡️
-- **Codex harness stays intact**: sidecars still get Codex file access, command execution, sessions, and evidence-based reporting.
+- 💸 **Spend far less on worker tokens**: move repetitive file reading, logs, tests, and broad exploration from premium GPT tokens to DeepSeek worker tokens. Many workflows can target **80-90% lower token cost**.
+- 🪄 **One prompt, agent does the wiring**: Codex installs, configures, starts, assigns, checks, resumes, and summarizes.
+- 🔁 **Resume instead of restarting**: sidecar sessions persist, so Codex can continue the right worker after a long test, interrupted investigation, or follow-up task.
+- 🔌 **No external proxy required**: the repo includes a small Python proxy from Codex Responses API to DeepSeek Chat Completions.
+- 🔑 **Bring your own DeepSeek key**: no hosted middle layer is required.
+- 🧠 **GPT stays in charge**: the expensive model plans, judges, and synthesizes; DeepSeek handles bounded worker tasks.
+- 🛠️ **Codex harness stays intact**: sidecars still get Codex file access, command execution, sessions, and evidence-based reporting.
 
-## Cost Shape
+## 💸 Cost Shape
 
 Prices below are per 1M tokens, checked on 2026-06-02 from the [OpenAI GPT-5.5 model page](https://developers.openai.com/api/docs/models/gpt-5.5/) and [DeepSeek pricing docs](https://api-docs.deepseek.com/quick_start/pricing). DeepSeek Pro input uses the cache-miss price for a conservative comparison.
 
@@ -71,7 +71,7 @@ Example at `1M input + 200K output`:
 
 In real use, GPT still spends tokens coordinating and reviewing. That is the design: spend premium tokens where judgment matters and move repetitive worker-token budget to DeepSeek. For many agent workflows, **80-90% token-cost reduction** is a realistic target.
 
-## What Codex Does Behind the Scenes
+## 🧠 What Codex Does Behind the Scenes
 
 When asked to use this skill, Codex can:
 
@@ -84,13 +84,13 @@ When asked to use this skill, Codex can:
 
 The operational details are intentionally kept out of this human README. Agent-facing instructions live in [SKILL.md](SKILL.md).
 
-## Built-In Proxy
+## 🔌 Built-In Proxy
 
 The included `deepseek-responses-proxy` is intentionally small: Python stdlib only, local-only by default, and designed for large Codex request bodies. It bridges function tools and ignores unsupported Responses built-in tools that Codex may attach by default. If a request explicitly requires an unsupported built-in tool, it returns a clear error.
 
 If you already use VibeAround or another compatible provider, Codex can keep using that instead.
 
-## Repository Layout
+## 📦 Repository Layout
 
 ```text
 .
