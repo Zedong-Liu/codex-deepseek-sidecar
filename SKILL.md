@@ -41,6 +41,12 @@ Run configuration once, not before every sidecar task:
 "<path-to-skill>/scripts/codex-deepseek-sidecar" --configure
 ```
 
+If `deepseek` already points at VibeAround or another provider, leave it alone and create a separate built-in-proxy profile:
+
+```bash
+"<path-to-skill>/scripts/codex-deepseek-sidecar" --profile deepseek-sidecar --configure
+```
+
 ## When to Delegate
 
 Use a sidecar when the task is self-contained, can run in parallel without conflicting edits, and benefits from a cheaper worker reading or executing a lot of context. Good fits include:

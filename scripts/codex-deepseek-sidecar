@@ -135,20 +135,74 @@ fi
 # Helper: parse codex doctor JSON for critical check failures
 parse_doctor() {
   python3 -c '
-import sys, json
-d = json.load(sys.stdin)
+import os, sys, json
+raw = sys.stdin.read()
+start = raw.find("{")
+if start < 0:
+    raise ValueError("doctor output did not contain JSON")
+d, _ = json.JSONDecoder().raw_decode(raw[start:])
 checks = d.get("checks", {})
+check_ids = [
+    item.strip()
+    for item in os.environ.get(
+        "DOCTOR_REQUIRED_CHECKS",
+        "config.load,installation,network.provider_reachability",
+    ).split(",")
+    if item.strip()
+]
 bad = []
-for cid in ("config.load", "installation", "network.provider_reachability"):
+for cid in check_ids:
     c = checks.get(cid, {})
     s = c.get("status", "?")
     if s != "ok":
-        bad.append("[" + s + "] " + c.get("summary", cid))
+        lines = ["[" + s + "] " + c.get("summary", cid)]
+        details = c.get("details")
+        if isinstance(details, dict):
+            for k, v in sorted(details.items()):
+                lines.append("  - " + str(k) + ": " + str(v))
+        remediation = c.get("remediation")
+        if remediation:
+            lines.append("  remedy: " + str(remediation))
+        bad.append("\n".join(lines))
 if bad:
-    print("\n".join(bad))
+    print("\n\n".join(bad))
 else:
     print("ok")
 '
+}
+
+config_section_value() {
+  local section="$1"
+  local key="$2"
+  [[ -f "$CONFIG_TOML" ]] || return 1
+  python3 - "$CONFIG_TOML" "$section" "$key" <<'PY'
+import re
+import sys
+path, section, key = sys.argv[1:4]
+current = None
+pattern = re.compile(r"^\s*\[" + re.escape(section) + r"\]\s*(?:#.*)?$")
+next_section = re.compile(r"^\s*\[")
+key_pattern = re.compile(r"^\s*" + re.escape(key) + r"\s*=\s*(.+?)\s*(?:#.*)?$")
+try:
+    lines = open(path, encoding="utf-8").read().splitlines()
+except OSError:
+    sys.exit(1)
+for line in lines:
+    if pattern.match(line):
+        current = section
+        continue
+    if current and next_section.match(line):
+        break
+    if current:
+        match = key_pattern.match(line)
+        if match:
+            value = match.group(1).strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", "\""):
+                value = value[1:-1]
+            print(value)
+            sys.exit(0)
+sys.exit(1)
+PY
 }
 
 # ── configure mode
@@ -156,6 +210,30 @@ else:
 if [[ "$configure_only" -eq 1 ]]; then
   [[ ${#args[@]} -eq 0 ]] || { echo "error: --configure does not accept a prompt" >&2; exit 2; }
   CONFIG_TOML="${HOME}/.codex/config.toml"
+  if command -v codex &>/dev/null; then
+    CODEX_DOCTOR_BIN="$(command -v codex)"
+  elif [[ -x /Applications/Codex.app/Contents/Resources/codex ]]; then
+    CODEX_DOCTOR_BIN="/Applications/Codex.app/Contents/Resources/codex"
+  else
+    echo "error: codex not found in PATH or /Applications/Codex.app/Contents/Resources/codex" >&2
+    exit 1
+  fi
+  if [[ -f "$CONFIG_TOML" ]]; then
+    preflight_doctor_out=$("$CODEX_DOCTOR_BIN" doctor --json --summary 2>&1) || true
+    preflight_result=$(printf '%s' "$preflight_doctor_out" | DOCTOR_REQUIRED_CHECKS="config.load" parse_doctor 2>/dev/null) || preflight_result="parse_error"
+    if [[ "$preflight_result" != "ok" ]]; then
+      echo "error: existing Codex config could not be loaded; not modifying $CONFIG_TOML" >&2
+      if [[ "$preflight_result" == "parse_error" ]]; then
+        printf '%s\n' "$preflight_doctor_out" >&2
+      else
+        printf '%s\n' "$preflight_result" >&2
+      fi
+      echo "" >&2
+      echo "Fix the existing config first, then rerun:" >&2
+      echo "  \"$CODEX_DOCTOR_BIN\" doctor --json --summary" >&2
+      exit 1
+    fi
+  fi
   provider_exists=0
   profile_exists=0
   [[ -f "$CONFIG_TOML" ]] && grep -q "^\[profiles\.${profile}\]" "$CONFIG_TOML" 2>/dev/null && profile_exists=1
@@ -180,6 +258,22 @@ if [[ "$configure_only" -eq 1 ]]; then
 
   if [[ "$provider_exists" -eq 1 ]]; then
     echo "Provider [model_providers.${profile}] already exists."
+    existing_base_url=$(config_section_value "model_providers.${profile}" "base_url" 2>/dev/null || true)
+    existing_provider_name=$(config_section_value "model_providers.${profile}" "name" 2>/dev/null || true)
+    if [[ -n "$existing_provider_name" ]]; then
+      echo "Existing provider name: $existing_provider_name"
+    fi
+    if [[ -n "$existing_base_url" ]]; then
+      echo "Existing provider base_url: $existing_base_url"
+      if [[ "$existing_base_url" == "http://127.0.0.1:12359/v1" ]]; then
+        echo "Existing provider already points at the built-in local proxy."
+      else
+        echo "Leaving the existing provider unchanged."
+        echo "If this is a VibeAround or other provider profile, start that provider before using this sidecar."
+        echo "To create a separate built-in-proxy profile, run:"
+        echo "  $0 --profile deepseek-sidecar --configure"
+      fi
+    fi
   else
     mkdir -p "$(dirname "$CONFIG_TOML")"
     {
@@ -193,18 +287,41 @@ if [[ "$configure_only" -eq 1 ]]; then
     echo "Wrote [model_providers.${profile}] to config.toml."
     echo ""
   fi
-  echo "Ensure the local proxy is running first:"
-  echo "  DEEPSEEK_API_KEY=... scripts/deepseek-responses-proxy"
+  echo "If using the built-in local proxy, ensure it is running first:"
+  echo "  DEEPSEEK_API_KEY=... \"$SCRIPT_DIR/deepseek-responses-proxy\""
   echo ""
-  echo "Running connectivity check..."
-  command -v codex &>/dev/null || { echo "error: codex not found in PATH" >&2; exit 1; }
-  doctor_out=$(codex doctor -c profile="$profile" --json --summary 2>&1) || true
-  result=$(printf '%s' "$doctor_out" | parse_doctor 2>/dev/null) || result="parse_error"
+  echo "Checking Codex config..."
+  doctor_out=$("$CODEX_DOCTOR_BIN" doctor -c profile="$profile" --json --summary 2>&1) || true
+  result=$(printf '%s' "$doctor_out" | DOCTOR_REQUIRED_CHECKS="config.load,installation" parse_doctor 2>/dev/null) || result="parse_error"
   case "$result" in
-    ok) echo "Connectivity check passed."; exit 0 ;;
+    ok) echo "Config check passed." ;;
     parse_error) echo "error: could not parse doctor output:" >&2; printf '%s\n' "$doctor_out" >&2; exit 1 ;;
-    *) echo "Connectivity check failed:" >&2; printf '%s\n' "$result" >&2; exit 1 ;;
+    *)
+      echo "Configuration check failed:" >&2
+      printf '%s\n' "$result" >&2
+      echo "" >&2
+      echo "Run this for the full redacted Codex report:" >&2
+      echo "  \"$CODEX_DOCTOR_BIN\" doctor -c profile=\"$profile\" --json --summary" >&2
+      echo "" >&2
+      echo "If [profiles.${profile}] or [model_providers.${profile}] already existed and is not this sidecar profile, create a separate profile instead:" >&2
+      echo "  $0 --profile deepseek-sidecar --configure" >&2
+      exit 1
+      ;;
   esac
+
+  network_result=$(printf '%s' "$doctor_out" | DOCTOR_REQUIRED_CHECKS="network.provider_reachability" parse_doctor 2>/dev/null) || network_result="parse_error"
+  if [[ "$network_result" == "ok" ]]; then
+    echo "Connectivity check passed."
+  elif [[ "$network_result" == "parse_error" ]]; then
+    echo "warning: could not parse connectivity check output; config is still written." >&2
+  else
+    echo "Connectivity check warning:" >&2
+    printf '%s\n' "$network_result" >&2
+    echo "Configuration is present, but the provider is not reachable yet." >&2
+    echo "Start the relevant proxy/provider, then run:" >&2
+    echo "  \"$CODEX_DOCTOR_BIN\" doctor -c profile=\"$profile\" --json --summary" >&2
+  fi
+  exit 0
 fi
 
 # Codex's extension-host tool bridge expects UTF-8 environment strings. Build

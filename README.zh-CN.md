@@ -89,6 +89,13 @@ export DEEPSEEK_API_KEY="sk-..."
 ~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar --configure
 ```
 
+如果已有的 `deepseek` profile 属于 VibeAround 或其他 provider，不要覆盖它；可以单独创建一个使用内置代理的 profile：
+
+```bash
+~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar \
+  --profile deepseek-sidecar --configure
+```
+
 生成的 provider 会让 Codex 指向：
 
 ```toml

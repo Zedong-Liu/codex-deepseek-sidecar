@@ -89,6 +89,13 @@ In another terminal, configure Codex for the proxy. This is a one-time setup; do
 ~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar --configure
 ```
 
+If your existing `deepseek` profile already belongs to VibeAround or another provider, keep it untouched and create a separate built-in-proxy profile instead:
+
+```bash
+~/.codex/skills/codex-deepseek-sidecar/scripts/codex-deepseek-sidecar \
+  --profile deepseek-sidecar --configure
+```
+
 The generated provider points Codex at:
 
 ```toml
