@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+log_file="$1"
+done_file="$2"
+session_file="$3"
+wrapper="$4"
+
+printf '\nDeepSeek subagent session output: %s\n\n' "$log_file"
+touch "$log_file"
+tail -f "$log_file" &
+tail_pid=$!
+
+stop_tail() {
+  kill "$tail_pid" 2>/dev/null || true
+  wait "$tail_pid" 2>/dev/null || true
+}
+trap stop_tail EXIT INT TERM
+
+while [[ ! -f "$done_file" ]]; do
+  sleep 0.25
+done
+sleep 0.2
+stop_tail
+trap - EXIT INT TERM
+rm -f "$done_file"
+
+session_id=""
+if [[ -f "$session_file" ]]; then
+  session_id=$(cat "$session_file")
+  rm -f "$session_file"
+fi
+
+if [[ -z "$session_id" ]]; then
+  printf '\nInitial call finished without a reusable session ID. Start a new delegated call from Codex.\n'
+  exit 0
+fi
+
+printf '\nInitial call finished. Continue DeepSeek session %s here.\n' "$session_id"
+printf 'Enter one follow-up message per line. Type /exit or /quit to close this chat.\n\n'
+
+while true; do
+  printf 'deepseek> '
+  IFS= read -r message || break
+  case "$message" in
+    /exit|/quit)
+      printf 'Session left idle for later resume: %s\n' "$session_id"
+      break
+      ;;
+    "")
+      continue
+      ;;
+  esac
+
+  set +e
+  "$wrapper" --no-monitor --no-doctor-check --session-id "$session_id" -- "$message" 2>&1 | tee -a "$log_file"
+  status=${PIPESTATUS[0]}
+  set -e
+  if [[ "$status" -ne 0 ]]; then
+    printf 'Follow-up exited with status %s. The session remains available for inspection or retry.\n' "$status"
+  fi
+  printf '\n'
+done

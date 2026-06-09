@@ -1,0 +1,4 @@
+interface:
+  display_name: "DeepSeek Codex Subagent (Community)"
+  short_description: "Delegate tasks in an interactive DeepSeek terminal"
+  default_prompt: "Use $deepseek-codex-subagent to delegate a bounded task and keep its interactive Terminal session available for follow-ups."
