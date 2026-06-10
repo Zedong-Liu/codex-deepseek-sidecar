@@ -1,3 +1,4 @@
+# codex-deepseek-sidecar
 [中文](README.zh-CN.md) | English
 
 **Give Codex a persistent DeepSeek subagent for parallel coding tasks.**
