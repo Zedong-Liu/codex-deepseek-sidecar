@@ -14,6 +14,7 @@
 <p align="center">
   <img src="assets/banner-zh.png" alt="codex-deepseek-sidecar" style="max-width:70%">
 </p>
+
 ## 🚀 一句话启动
 
 把这个仓库链接和下面这句话交给 Codex：
