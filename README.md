@@ -6,15 +6,11 @@
 
 **Give Codex a persistent DeepSeek subagent for parallel coding tasks.**
 
-Delegate code reviews, debugging, research, and other bounded tasks without interrupting your main Codex workflow. Each task runs in its own Terminal with live output and keeps its full session context.
+Delegate code reviews, debugging, research, and other bounded tasks without interrupting your main Codex workflow. The expensive GPT stays the brain — planning, judging, synthesizing — while cheaper DeepSeek workers handle long tests, log analysis, broad exploration, and other token-heavy execution. Each task runs in its own Terminal with live output and keeps its full session context.
 
-When the task finishes, the Terminal becomes an interactive `deepseek>` prompt for follow-ups. You can close it and resume the same session later.
+When the task finishes, the Terminal becomes an interactive `deepseek>` prompt for follow-ups. You can close it, check status by task ID, and resume the same session later.
 
 **No external proxy required. Bring your own DeepSeek key. Codex handles the rest. 🚀**
-
-`codex-deepseek-sidecar` is a Codex skill that lets your main GPT agent launch cheaper DeepSeek worker agents for bounded side tasks: long tests, log analysis, broad code exploration, independent reviews, implementation attempts.
-
-The pattern is simple: the expensive GPT stays the brain — planning, judging, synthesizing. DeepSeek workers handle repetitive, long-context, token-heavy execution. Everything still runs inside the Codex harness.
 
 ## 🚀 You only need these prompts
 
