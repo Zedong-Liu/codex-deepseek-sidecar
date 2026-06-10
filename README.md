@@ -1,103 +1,106 @@
-# DeepSeek Codex Subagent
+[中文](README.zh-CN.md) | English
 
-A [Codex CLI](https://github.com/openai/codex) skill that delegates tasks to a DeepSeek-backed subagent with persistent sessions and an interactive Terminal window.
+<p align="center">
+  <img src="assets/codex-deepseek-sidecar-logo.png" alt="codex-deepseek-sidecar pixel logo" width="106">
+</p>
 
-Each run opens a Terminal showing live output. When the task finishes, the window becomes a `deepseek>` prompt for follow-ups — the session stays alive until you `/exit`.
+**Give Codex a persistent DeepSeek subagent for parallel coding tasks.**
 
-## What it does
+Delegate code reviews, debugging, research, and other bounded tasks without interrupting your main Codex workflow. Each task runs in its own Terminal with live output and keeps its full session context.
 
-- **Delegate bounded tasks** to a DeepSeek subagent from within a Codex session
-- **Persistent sessions** — resume a session later with full context intact
-- **Interactive Terminal** — live log tailing, then a follow-up prompt
-- **Isolated environment** — `env -i` child process, UTF-8 validated, no host env leakage
-- **Concurrency guard** — per-session lock files prevent double-resume
+When the task finishes, the Terminal becomes an interactive `deepseek>` prompt for follow-ups. You can close it and resume the same session later.
 
-## Prerequisites
+**No external proxy required. Bring your own DeepSeek key. Codex handles the rest. 🚀**
 
-- [Codex CLI](https://github.com/openai/codex) installed and authenticated
-- A DeepSeek profile reachable from Codex (VibeAround proxy or CC switch)
-- macOS (Terminal.app for the monitor window)
+`codex-deepseek-sidecar` is a Codex skill that lets your main GPT agent launch cheaper DeepSeek worker agents for bounded side tasks: long tests, log analysis, broad code exploration, independent reviews, implementation attempts.
 
-## Install
+The pattern is simple: the expensive GPT stays the brain — planning, judging, synthesizing. DeepSeek workers handle repetitive, long-context, token-heavy execution. Everything still runs inside the Codex harness.
 
-```bash
-git clone https://github.com/<your-org>/deepseek-codex-subagent.git \
-  ~/.codex/skills/deepseek-codex-subagent
-cd ~/.codex/skills/deepseek-codex-subagent
-chmod +x scripts/*
+## 🚀 You only need these prompts
+
+This skill is meant to be read and executed by Codex, not memorized by humans. On a machine with Codex CLI, Python 3, and a DeepSeek key, Codex should have everything running in about five minutes.
+
+### Install — give this repo to Codex
+
+```text
+Install and configure https://github.com/Zedong-Liu/codex-deepseek-sidecar.
+I have a DeepSeek API key — ask me for it if it's not configured on this machine yet.
+If a local proxy or profile needs to be set up, handle that too.
+Then launch a DeepSeek sidecar for this repo to handle long or log-heavy tasks.
 ```
 
-Optional: add a symlink so you can just type `codex-deepseek-subagent`:
+### Delegate a task
 
-```bash
-ln -s ~/.codex/skills/deepseek-codex-subagent/scripts/codex-deepseek-subagent \
-  ~/.codex/bin/codex-deepseek-subagent
+```text
+Use a DeepSeek sidecar to run the slow tests while you review the code.
 ```
 
-## Quick start
-
-Set up the DeepSeek profile (one-time):
-
-```bash
-~/.codex/skills/deepseek-codex-subagent/scripts/codex-deepseek-subagent --configure
+```text
+Use a DeepSeek sidecar to analyze this CI log and find the real failure.
 ```
 
-Delegate a task:
-
-```bash
-~/.codex/skills/deepseek-codex-subagent/scripts/codex-deepseek-subagent \
-  --cd /path/to/project \
-  "Review src/auth.py for security issues. Report findings with line references."
+```text
+Use your own judgment on when to split work across DeepSeek sidecars.
+Auto-dispatch for tests, log analysis, and broad exploration, then synthesize results.
 ```
 
-For multiple parallel tasks in one project, name each task:
+## ✨ Why use it
 
-```bash
-~/.codex/skills/deepseek-codex-subagent/scripts/codex-deepseek-subagent \
-  --cd /path/to/project \
-  --task-id review-auth \
-  "Review src/auth.py for security issues. Report findings with line references."
+- 💸 **Dramatically lower worker token cost** — shift repeated file reads, log inspection, test runs, and broad exploration from expensive GPT tokens to DeepSeek worker tokens. Many workflows target an **80–90% lower token cost**.
+- **No external proxy needed** — a small built-in Python proxy bridges Codex Responses API to DeepSeek Chat Completions.
+- **GPT stays the brain** — the expensive model handles planning, judgment, and synthesis; DeepSeek handles bounded worker tasks.
+- **Still Codex harness** — sidecars retain Codex file access, command execution, sessions, and evidence reporting.
+
+## 💸 Cost estimate
+
+Prices per 1M tokens, based on [OpenAI GPT-5.5 model page](https://developers.openai.com/api/docs/models/gpt-5.5/) and [DeepSeek pricing docs](https://api-docs.deepseek.com/quick_start/pricing). DeepSeek Pro input price uses cache-miss for a conservative estimate.
+
+| Model | Best role | Input | Output |
+| ---- | ---- | ----: | ----: |
+| GPT-5.5 | Brain: planning, judgment, synthesis | $5.00 | $30.00 |
+| DeepSeek V4 Pro | Strong worker: review, debug, implement | $0.435 | $0.87 |
+| DeepSeek V4 Flash | Fast worker: logs, exploration, cheap parallel passes | $0.14 | $0.28 |
+
+At `1M input + 200K output`:
+
+| Routing | Approx cost | Token cost reduction |
+| ---- | ----: | ----: |
+| All GPT-5.5 | $11.00 | baseline |
+| DeepSeek V4 Pro worker tokens | $0.61 | ~94% |
+| DeepSeek V4 Flash worker tokens | $0.20 | ~98% |
+
+In real use, GPT still spends tokens on coordination and review. That is the point: spend expensive tokens on judgment, move repetitive worker-token budgets to DeepSeek. For many agent workflows, **80–90% token cost save** is a realistic target.
+
+## 🧠 What Codex does behind the scenes
+
+When you ask Codex to use this skill, it can:
+
+- Install the repo as a Codex skill.
+- Start the built-in lightweight proxy if no local DeepSeek provider is available.
+- Configure a Codex profile once so future tasks skip cold-start setup.
+- Launch DeepSeek sidecars for bounded tasks.
+- Track task IDs and sessions so follow-ups resume to the correct worker.
+- Collect sidecar conclusions and synthesize them into the main response.
+
+These operational details belong in [SKILL.md](SKILL.md), not in front of human readers.
+
+## 🔌 Built-in proxy
+
+The bundled `deepseek-responses-proxy` is intentionally minimal: Python stdlib only, localhost by default, designed for Codex's large request bodies. It bridges function tools and ignores Responses built-in tools that DeepSeek Chat does not support, returning a clear error if one is explicitly required.
+
+If you already use VibeAround or another compatible provider, Codex can keep using that instead.
+
+## 📦 Repo layout
+
+```text
+.
+├── SKILL.md
+├── agents/openai.yaml
+├── scripts/codex-deepseek-sidecar
+├── scripts/codex-deepseek-subagent
+├── scripts/deepseek-responses-proxy
+└── scripts/terminal-chat
 ```
-
-Check if the session is still alive:
-
-```bash
-~/.codex/skills/deepseek-codex-subagent/scripts/codex-deepseek-subagent \
-  --cd /path/to/project --task-id review-auth --status
-```
-
-List recorded sessions for a project:
-
-```bash
-~/.codex/skills/deepseek-codex-subagent/scripts/codex-deepseek-subagent \
-  --cd /path/to/project --list
-```
-
-Resume for follow-up work:
-
-```bash
-~/.codex/skills/deepseek-codex-subagent/scripts/codex-deepseek-subagent \
-  --cd /path/to/project --task-id review-auth --resume \
-  "Address the first two findings from your previous review."
-```
-
-## Key flags
-
-| Flag | Purpose |
-| ---- | ------- |
-| `--cd DIR` | Project directory for session tracking |
-| `--task-id NAME` | Name a task within `--cd DIR` for status/resume lookup |
-| `--resume`, `-r` | Continue the latest session in that directory |
-| `--session-id UUID` | Resume a specific session |
-| `--status` | Report `running` / `idle` / `missing` / `untracked` |
-| `--list` | List recorded sessions for `--cd DIR` |
-| `--no-monitor` | Skip the Terminal window (CI / automation) |
-| `--no-doctor-check` | Skip connectivity check before launch |
-| `--pass-env NAME` | Pass an env var into the isolated child |
-| `--profile NAME` | Use a non-default Codex profile |
-| `--json` | JSONL event stream |
-
-See `SKILL.md` for the full agent-facing documentation and `--help` for all options.
 
 ## License
 
