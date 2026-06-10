@@ -12,6 +12,11 @@ When the task finishes, the Terminal becomes an interactive `deepseek>` prompt f
 
 **No external proxy required. Bring your own DeepSeek key. Codex handles the rest. 🚀**
 
+
+<p align="center">
+  <img src="assets/banner-en.png" alt="codex-deepseek-sidecar" style="max-width:70%">
+</p>
+
 ## 🚀 You only need these prompts
 
 This skill is meant to be read and executed by Codex, not memorized by humans. On a machine with Codex CLI, Python 3, and a DeepSeek key, Codex should have everything running in about five minutes.

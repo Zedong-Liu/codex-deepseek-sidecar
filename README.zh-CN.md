@@ -14,6 +14,11 @@
 
 核心模式很简单：高级 GPT 继续做主大脑，负责规划、判断和综合；DeepSeek 工人负责重复、长上下文、token-heavy 的执行工作；所有事情仍然跑在 Codex harness 里。
 
+
+<p align="center">
+  <img src="assets/banner-zh.png" alt="codex-deepseek-sidecar" style="max-width:70%">
+</p>
+
 ## 🚀 一句话启动
 
 把这个仓库链接和下面这句话交给 Codex：
