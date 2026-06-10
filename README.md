@@ -1,9 +1,5 @@
 [中文](README.zh-CN.md) | English
 
-<p align="center">
-  <img src="assets/codex-deepseek-sidecar-logo.png" alt="codex-deepseek-sidecar pixel logo" width="106">
-</p>
-
 **Give Codex a persistent DeepSeek subagent for parallel coding tasks.**
 
 Delegate code reviews, debugging, research, and other bounded tasks without interrupting your main Codex workflow. The expensive GPT stays the brain — planning, judging, synthesizing — while cheaper DeepSeek workers handle long tests, log analysis, broad exploration, and other token-heavy execution. Each task runs in its own Terminal with live output and keeps its full session context.
@@ -16,7 +12,6 @@ When the task finishes, the Terminal becomes an interactive `deepseek>` prompt f
 <p align="center">
   <img src="assets/banner-en.png" alt="codex-deepseek-sidecar" style="max-width:70%">
 </p>
-
 ## 🚀 You only need these prompts
 
 This skill is meant to be read and executed by Codex, not memorized by humans. On a machine with Codex CLI, Python 3, and a DeepSeek key, Codex should have everything running in about five minutes.
