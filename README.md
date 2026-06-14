@@ -1,3 +1,5 @@
+# Codex-deepseek-sidecar
+
 [English](README.en.md) | 中文
 
 用一句 prompt，让 Codex 自己启动 DeepSeek sidecar agents。
