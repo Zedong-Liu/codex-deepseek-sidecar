@@ -4,7 +4,7 @@
 
 用一句 prompt，让 Codex 自己启动 DeepSeek sidecar agents。
 
-**不需要额外代理。带上你自己的 DeepSeek key，剩下交给 Codex。🚀**
+**不需要第三方代理。带上你自己的 DeepSeek key，内置本地代理会处理 Codex Responses 流量。🚀**
 
 `codex-deepseek-sidecar` 是一个 Codex skill，让你的主 agent 可以把边界清晰的子任务——长测试、日志分析、大范围代码探索、独立 review、实现尝试——派给更便宜的 DeepSeek 工人 agent。
 
@@ -21,7 +21,7 @@
 ```text
 安装并使用 https://github.com/Zedong-Liu/codex-deepseek-sidecar。
 我有 DeepSeek API key；如果本机还没有配置，请向我索取。
-如果需要，请配置本地代理/profile。
+如果需要，请配置本地代理/profile；使用内置代理时请启动并保持它运行。
 然后为当前仓库启动一个 DeepSeek sidecar，用它处理适合分派的长任务或日志任务。
 ```
 
@@ -44,7 +44,7 @@
 ## ✨ 为什么用户会想用
 
 - 💸 **大幅降低 worker token 成本**：把重复读文件、看日志、跑测试、大范围探索从昂贵 GPT token 迁移到 DeepSeek worker token。很多工作流可以瞄准 **降低 80-90% 的 token 成本**。
-- **不需要外部代理**：仓库内置一个小型 Python 代理，把 Codex Responses API 桥接到 DeepSeek Chat Completions。
+- **不需要第三方代理**：仓库内置一个小型 Python 代理，把 Codex Responses API 桥接到 DeepSeek Chat Completions。使用内置 profile 时，本地代理进程需要保持运行。
 - **GPT 仍然做主脑**：昂贵模型负责规划、判断、综合；DeepSeek 负责边界清晰的工人任务。
 - **继续使用 Codex harness**：sidecar 仍然具备 Codex 的文件访问、命令执行、会话保持和结果汇报能力。
 
@@ -83,16 +83,26 @@
 
 ## 🔌 内置代理
 
-内置的 `deepseek-responses-proxy` 刻意保持很小：只用 Python 标准库，默认只监听本地，并针对 Codex 的大请求体设计。它会桥接 function tools，并忽略 Codex 默认附带但 DeepSeek Chat 不支持的 Responses built-in tools；如果请求明确要求某个不支持的 built-in tool，则返回明确的错误。
+内置的 `deepseek-responses-proxy` 刻意保持很小：只用 Python 标准库，默认只监听本地，并针对 Codex 的大请求体设计。它会桥接 function tools，并忽略 Codex 默认附带但 DeepSeek Chat 不支持的 Responses built-in tools；如果请求明确要求某个不支持的 built-in tool，则返回明确的错误。需要长期复用时，它也可以通过 `--api-key-file` 从私有文件读取 key。
 
 如果你已经在用 VibeAround 或其他兼容 provider，Codex 也可以继续使用原来的方案。
+
+## 🧩 框架适配
+
+Codex 仍然是主线稳定入口。其他框架适配放在各自安装面里，避免改变 Codex skill 的行为：
+
+- `.opencode/` 包含 OpenCode 适配器和 OpenCode skill。
+- `.claude-plugin/` 加 `skills/claude-deepseek-sidecar/` 包含 Claude Code 适配器。
 
 ## 📦 仓库结构
 
 ```text
 .
+├── .claude-plugin/
+├── .opencode/
 ├── SKILL.md
 ├── agents/openai.yaml
+├── skills/claude-deepseek-sidecar/
 ├── scripts/codex-deepseek-sidecar
 ├── scripts/codex-deepseek-subagent
 ├── scripts/deepseek-responses-proxy

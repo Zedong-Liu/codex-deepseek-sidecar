@@ -1,0 +1,333 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  opencode-deepseek-sidecar [--cd DIR] [--task-id NAME] [--session-id ID] [--resume] [--list] [--status] [--json] [--no-monitor] [--pass-env NAME] [--opencode-cmd CMD] [--model PROVIDER/MODEL] [--api-base-url URL] [--api-key-env NAME] [--api-key-file FILE] PROMPT...
+  opencode-deepseek-sidecar [options] -
+
+Runs OpenCode as a DeepSeek-backed sidecar.
+Use a running OpenAI-compatible endpoint, such as deepseek-responses-proxy's /v1/chat/completions passthrough.
+This wrapper does not use Codex profiles.
+EOF
+}
+
+workdir="$PWD"
+task_id=""
+session_id=""
+resume=0
+status_only=0
+list_only=0
+json=0
+monitor_enabled=1
+opencode_cmd="${OPENCODE_SIDECAR_OPENCODE_CMD:-}"
+model="${OPENCODE_SIDECAR_MODEL:-deepseek/deepseek-v4-pro}"
+api_base_url="${OPENCODE_SIDECAR_API_BASE_URL:-http://127.0.0.1:12359/v1}"
+api_key_env="${OPENCODE_SIDECAR_API_KEY_ENV:-DEEPSEEK_API_KEY}"
+api_key_file="${OPENCODE_SIDECAR_API_KEY_FILE:-}"
+pass_env=()
+args=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --cd|-C)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      workdir="$2"; shift 2 ;;
+    --task-id)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      task_id="$2"; shift 2 ;;
+    --session-id)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      session_id="$2"; shift 2 ;;
+    --resume|-r)
+      resume=1; shift ;;
+    --status)
+      status_only=1; shift ;;
+    --list)
+      list_only=1; shift ;;
+    --json)
+      json=1; shift ;;
+    --no-monitor)
+      monitor_enabled=0; shift ;;
+    --pass-env)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      pass_env+=("$2"); shift 2 ;;
+    --opencode-cmd)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      opencode_cmd="$2"; shift 2 ;;
+    --model)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      model="$2"; shift 2 ;;
+    --api-base-url)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      api_base_url="$2"; shift 2 ;;
+    --api-key-env)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      api_key_env="$2"; shift 2 ;;
+    --api-key-file)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      api_key_file="$2"; shift 2 ;;
+    -h|--help)
+      usage; exit 0 ;;
+    --)
+      shift; args+=("$@"); break ;;
+    *)
+      args+=("$1"); shift ;;
+  esac
+done
+
+if [[ "$status_only" -eq 1 && "$list_only" -eq 1 ]]; then
+  echo "error: --status and --list cannot be used together" >&2
+  exit 2
+fi
+if [[ ( "$status_only" -eq 1 || "$list_only" -eq 1 ) && ${#args[@]} -ne 0 ]]; then
+  echo "error: --status and --list do not accept a prompt" >&2
+  exit 2
+fi
+if [[ "$status_only" -eq 0 && "$list_only" -eq 0 && ${#args[@]} -eq 0 ]]; then
+  usage >&2
+  exit 2
+fi
+if [[ -n "$task_id" && ! "$task_id" =~ ^[A-Za-z0-9][A-Za-z0-9_.:-]*$ ]]; then
+  echo "error: invalid task id: $task_id" >&2
+  exit 2
+fi
+
+SESSION_FILE="/tmp/opencode-sidecar-sessions.txt"
+
+extract_session_id() {
+  sed 's/.* session_id=//'
+}
+
+extract_workdir() {
+  local line="$1"
+  line="${line#workdir=}"
+  if [[ "$line" == *" task_id="* ]]; then
+    printf '%s' "${line%% task_id=*}"
+  else
+    printf '%s' "${line%% session_id=*}"
+  fi
+}
+
+extract_task_id() {
+  local line="$1"
+  if [[ "$line" == *" task_id="* ]]; then
+    line="${line#* task_id=}"
+    printf '%s' "${line%% session_id=*}"
+  else
+    printf '%s' "-"
+  fi
+}
+
+latest_session_line() {
+  [[ -f "$SESSION_FILE" ]] || return 0
+  if [[ -n "$task_id" ]]; then
+    grep -F "workdir=${workdir} task_id=${task_id} session_id=" "$SESSION_FILE" 2>/dev/null | tail -1 || true
+  else
+    grep -F "workdir=${workdir} " "$SESSION_FILE" 2>/dev/null | tail -1 || true
+  fi
+}
+
+if [[ "$list_only" -eq 1 ]]; then
+  found=0
+  if [[ -f "$SESSION_FILE" ]]; then
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      listed_workdir=$(extract_workdir "$line")
+      listed_task_id=$(extract_task_id "$line")
+      listed_session_id=$(printf '%s' "$line" | extract_session_id)
+      [[ "$listed_workdir" == "$workdir" ]] || continue
+      [[ -z "$task_id" || "$listed_task_id" == "$task_id" ]] || continue
+      echo "status=recorded task_id=$listed_task_id session_id=$listed_session_id workdir=$listed_workdir"
+      found=1
+    done < "$SESSION_FILE"
+  fi
+  [[ "$found" -eq 1 ]] || echo "status=missing workdir=$workdir"
+  exit 0
+fi
+
+if [[ ( "$resume" -eq 1 || "$status_only" -eq 1 ) && -z "$session_id" ]]; then
+  session_line=$(latest_session_line)
+  [[ -z "$session_line" ]] || session_id=$(printf '%s' "$session_line" | extract_session_id)
+fi
+
+if [[ "$status_only" -eq 1 ]]; then
+  if [[ -n "$session_id" ]]; then
+    echo "status=recorded session_id=$session_id workdir=$workdir next=resume"
+  else
+    echo "status=missing workdir=$workdir next=new-session"
+  fi
+  exit 0
+fi
+
+if [[ "$resume" -eq 1 && -z "$session_id" ]]; then
+  echo "error: no previous OpenCode sidecar session found for workdir=${workdir}" >&2
+  exit 2
+fi
+if [[ ! -d "$workdir" ]]; then
+  echo "error: working directory does not exist: $workdir" >&2
+  exit 2
+fi
+
+if [[ -z "$opencode_cmd" ]]; then
+  if command -v opencode >/dev/null 2>&1; then
+    opencode_cmd="opencode"
+  else
+    opencode_cmd="npx -y opencode-ai"
+  fi
+fi
+
+read_key_file() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  sed -n '/^[[:space:]]*#/d; /^[[:space:]]*$/d; s/^[[:space:]]*//; s/[[:space:]]*$//; p; q' "$path"
+}
+
+api_key="${!api_key_env:-}"
+if [[ -z "$api_key" && -n "$api_key_file" ]]; then
+  api_key=$(read_key_file "$api_key_file" || true)
+fi
+if [[ -z "$api_key" ]]; then
+  echo "error: missing $api_key_env${api_key_file:+ or $api_key_file}" >&2
+  exit 2
+fi
+
+provider="${model%%/*}"
+model_id="${model#*/}"
+if [[ "$provider" == "$model" ]]; then
+  provider="deepseek"
+fi
+
+opencode_config=$(python3 - "$provider" "$model_id" "$api_base_url" "$api_key" <<'PY'
+import json
+import sys
+provider, model, base_url, api_key = sys.argv[1:5]
+print(json.dumps({
+    "$schema": "https://opencode.ai/config.json",
+    "autoupdate": False,
+    "model": f"{provider}/{model}",
+    "provider": {
+        provider: {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": provider,
+            "options": {"baseURL": base_url, "apiKey": api_key},
+            "models": {model: {"name": model, "limit": {"context": 200000, "output": 8192}}},
+        }
+    }
+}, separators=(",", ":")))
+PY
+)
+
+if [[ ${#pass_env[@]} -gt 0 ]]; then
+  for env_name in "${pass_env[@]}"; do
+    if [[ ! "$env_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "error: invalid environment variable name for --pass-env: $env_name" >&2
+      exit 2
+    fi
+    [[ -n "${!env_name+x}" ]] || { echo "error: --pass-env variable is not set: $env_name" >&2; exit 2; }
+  done
+fi
+
+prompt=""
+if [[ ${#args[@]} -eq 1 && "${args[0]}" == "-" ]]; then
+  prompt=$(cat)
+else
+  prompt="${args[*]}"
+fi
+
+cmd=(
+  /usr/bin/env
+  "OPENCODE_CONFIG_CONTENT=$opencode_config"
+)
+if [[ ${#pass_env[@]} -gt 0 ]]; then
+  for env_name in "${pass_env[@]}"; do
+    cmd+=("$env_name=${!env_name}")
+  done
+fi
+cmd+=(bash -lc)
+
+run_cmd=$(printf 'cd %q && exec %s run --dir %q --format json --model %q' "$workdir" "$opencode_cmd" "$workdir" "$model")
+if [[ "$json" -ne 1 ]]; then
+  run_cmd+=" --print-logs"
+fi
+if [[ -n "$session_id" ]]; then
+  run_cmd+=" --session $(printf '%q' "$session_id")"
+elif [[ "$resume" -eq 1 ]]; then
+  run_cmd+=" --continue"
+fi
+run_cmd+=" -- $(printf '%q' "$prompt")"
+
+tmp_dir=$(mktemp -d /tmp/opencode-sidecar.XXXXXX)
+out_file="$tmp_dir/output"
+monitor_log=""
+monitor_done=""
+
+cleanup() {
+  [[ -z "$monitor_done" ]] || touch "$monitor_done"
+  rm -rf "$tmp_dir"
+}
+trap cleanup EXIT
+
+if [[ "$monitor_enabled" -eq 1 ]]; then
+  monitor_log=$(mktemp /tmp/opencode-sidecar-monitor.XXXXXX)
+  monitor_done="$monitor_log.done"
+  /usr/bin/osascript - "$monitor_log" "$monitor_done" <<'OSA' >/dev/null 2>&1 || true
+on run argv
+  set logFile to item 1 of argv
+  set doneFile to item 2 of argv
+  tell application "Terminal"
+    activate
+    do script "printf '\\nOpenCode sidecar output: " & quoted form of logFile & "\\n\\n'; touch " & quoted form of logFile & "; tail -f " & quoted form of logFile & " & tailpid=$!; while [ ! -f " & quoted form of doneFile & " ]; do sleep 0.25; done; kill $tailpid 2>/dev/null"
+  end tell
+end run
+OSA
+fi
+
+set +e
+"${cmd[@]}" "$run_cmd" >"$out_file" 2>&1
+exit_code=$?
+set -e
+
+if [[ -n "$monitor_log" ]]; then
+  cat "$out_file" | tee -a "$monitor_log"
+else
+  cat "$out_file"
+fi
+
+if [[ "$exit_code" -eq 0 && -z "$session_id" ]]; then
+  new_sid=$(python3 - "$out_file" <<'PY'
+import json, re, sys
+text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+for line in text.splitlines():
+    try:
+        obj = json.loads(line)
+    except Exception:
+        continue
+    stack = [obj]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            for key, value in item.items():
+                if key in ("sessionID", "sessionId", "session_id", "id") and isinstance(value, str):
+                    if re.fullmatch(r"[0-9A-Za-z_-]{8,}", value):
+                        print(value)
+                        raise SystemExit
+                if isinstance(value, (dict, list)):
+                    stack.append(value)
+        elif isinstance(item, list):
+            stack.extend(item)
+PY
+)
+  if [[ -n "$new_sid" ]]; then
+    if [[ -n "$task_id" ]]; then
+      echo "workdir=${workdir} task_id=${task_id} session_id=${new_sid}" >> "$SESSION_FILE"
+    else
+      echo "workdir=${workdir} session_id=${new_sid}" >> "$SESSION_FILE"
+    fi
+  fi
+fi
+
+exit "$exit_code"

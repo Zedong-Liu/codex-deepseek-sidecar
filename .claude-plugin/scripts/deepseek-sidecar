@@ -1,0 +1,332 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  claude-sidecar [--cd DIR] [--task-id NAME] [--session-id ID] [--resume] [--list] [--status] [--json] [--no-monitor] [--pass-env NAME] [--claude-cmd CMD] [--model MODEL] [--settings FILE_OR_JSON] [--api-key-env NAME] [--api-key-file FILE] [--base-url URL] [--base-url-env NAME] [--bare] PROMPT...
+  claude-sidecar [options] -
+
+Runs Claude Code as a sidecar. This wrapper does not proxy or translate protocols.
+Use Claude Code's own settings/env support for DeepSeek or other Anthropic-compatible providers.
+EOF
+}
+
+workdir="$PWD"
+task_id=""
+session_id=""
+resume=0
+status_only=0
+list_only=0
+json=0
+monitor_enabled=1
+bare=0
+claude_cmd="${CLAUDE_SIDECAR_CLAUDE_CMD:-}"
+model="${CLAUDE_SIDECAR_MODEL:-}"
+settings="${CLAUDE_SIDECAR_SETTINGS:-}"
+api_key_env="${CLAUDE_SIDECAR_API_KEY_ENV:-ANTHROPIC_API_KEY}"
+api_key_file="${CLAUDE_SIDECAR_API_KEY_FILE:-}"
+base_url="${CLAUDE_SIDECAR_BASE_URL:-}"
+base_url_env="${CLAUDE_SIDECAR_BASE_URL_ENV:-ANTHROPIC_BASE_URL}"
+pass_env=()
+args=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --cd|-C)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      workdir="$2"; shift 2 ;;
+    --task-id)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      task_id="$2"; shift 2 ;;
+    --session-id)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      session_id="$2"; shift 2 ;;
+    --resume|-r)
+      resume=1; shift ;;
+    --status)
+      status_only=1; shift ;;
+    --list)
+      list_only=1; shift ;;
+    --json)
+      json=1; shift ;;
+    --no-monitor)
+      monitor_enabled=0; shift ;;
+    --bare)
+      bare=1; shift ;;
+    --pass-env)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      pass_env+=("$2"); shift 2 ;;
+    --claude-cmd)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      claude_cmd="$2"; shift 2 ;;
+    --model)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      model="$2"; shift 2 ;;
+    --settings)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      settings="$2"; shift 2 ;;
+    --api-key-env)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      api_key_env="$2"; shift 2 ;;
+    --api-key-file)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      api_key_file="$2"; shift 2 ;;
+    --base-url)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      base_url="$2"; shift 2 ;;
+    --base-url-env)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      base_url_env="$2"; shift 2 ;;
+    -h|--help)
+      usage; exit 0 ;;
+    --)
+      shift; args+=("$@"); break ;;
+    *)
+      args+=("$1"); shift ;;
+  esac
+done
+
+if [[ "$status_only" -eq 1 && "$list_only" -eq 1 ]]; then
+  echo "error: --status and --list cannot be used together" >&2
+  exit 2
+fi
+if [[ ( "$status_only" -eq 1 || "$list_only" -eq 1 ) && ${#args[@]} -ne 0 ]]; then
+  echo "error: --status and --list do not accept a prompt" >&2
+  exit 2
+fi
+if [[ "$status_only" -eq 0 && "$list_only" -eq 0 && ${#args[@]} -eq 0 ]]; then
+  usage >&2
+  exit 2
+fi
+if [[ -n "$task_id" && ! "$task_id" =~ ^[A-Za-z0-9][A-Za-z0-9_.:-]*$ ]]; then
+  echo "error: invalid task id: $task_id" >&2
+  exit 2
+fi
+
+SESSION_FILE="/tmp/claude-sidecar-sessions.txt"
+
+extract_session_id() {
+  sed 's/.* session_id=//'
+}
+
+extract_workdir() {
+  local line="$1"
+  line="${line#workdir=}"
+  if [[ "$line" == *" task_id="* ]]; then
+    printf '%s' "${line%% task_id=*}"
+  else
+    printf '%s' "${line%% session_id=*}"
+  fi
+}
+
+extract_task_id() {
+  local line="$1"
+  if [[ "$line" == *" task_id="* ]]; then
+    line="${line#* task_id=}"
+    printf '%s' "${line%% session_id=*}"
+  else
+    printf '%s' "-"
+  fi
+}
+
+latest_session_line() {
+  [[ -f "$SESSION_FILE" ]] || return 0
+  if [[ -n "$task_id" ]]; then
+    grep -F "workdir=${workdir} task_id=${task_id} session_id=" "$SESSION_FILE" 2>/dev/null | tail -1 || true
+  else
+    grep -F "workdir=${workdir} " "$SESSION_FILE" 2>/dev/null | tail -1 || true
+  fi
+}
+
+if [[ "$list_only" -eq 1 ]]; then
+  found=0
+  if [[ -f "$SESSION_FILE" ]]; then
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      listed_workdir=$(extract_workdir "$line")
+      listed_task_id=$(extract_task_id "$line")
+      listed_session_id=$(printf '%s' "$line" | extract_session_id)
+      [[ "$listed_workdir" == "$workdir" ]] || continue
+      [[ -z "$task_id" || "$listed_task_id" == "$task_id" ]] || continue
+      echo "status=recorded task_id=$listed_task_id session_id=$listed_session_id workdir=$listed_workdir"
+      found=1
+    done < "$SESSION_FILE"
+  fi
+  [[ "$found" -eq 1 ]] || echo "status=missing workdir=$workdir"
+  exit 0
+fi
+
+if [[ ( "$resume" -eq 1 || "$status_only" -eq 1 ) && -z "$session_id" ]]; then
+  session_line=$(latest_session_line)
+  [[ -z "$session_line" ]] || session_id=$(printf '%s' "$session_line" | extract_session_id)
+fi
+
+if [[ "$status_only" -eq 1 ]]; then
+  if [[ -n "$session_id" ]]; then
+    echo "status=recorded session_id=$session_id workdir=$workdir next=resume"
+  else
+    echo "status=missing workdir=$workdir next=new-session"
+  fi
+  exit 0
+fi
+
+if [[ "$resume" -eq 1 && -z "$session_id" ]]; then
+  echo "error: no previous Claude sidecar session found for workdir=${workdir}" >&2
+  exit 2
+fi
+if [[ ! -d "$workdir" ]]; then
+  echo "error: working directory does not exist: $workdir" >&2
+  exit 2
+fi
+
+if [[ -z "$claude_cmd" ]]; then
+  if command -v claude >/dev/null 2>&1; then
+    claude_cmd="claude"
+  elif [[ -x "$HOME/.local/bin/claude" ]]; then
+    claude_cmd="$HOME/.local/bin/claude"
+  else
+    echo "error: claude not found; set CLAUDE_SIDECAR_CLAUDE_CMD or pass --claude-cmd" >&2
+    exit 1
+  fi
+fi
+
+read_key_file() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  sed -n '/^[[:space:]]*#/d; /^[[:space:]]*$/d; s/^[[:space:]]*//; s/[[:space:]]*$//; p; q' "$path"
+}
+
+api_key="${!api_key_env:-}"
+if [[ -z "$api_key" && -n "$api_key_file" ]]; then
+  api_key=$(read_key_file "$api_key_file" || true)
+fi
+
+if [[ ${#pass_env[@]} -gt 0 ]]; then
+  for env_name in "${pass_env[@]}"; do
+    if [[ ! "$env_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "error: invalid environment variable name for --pass-env: $env_name" >&2
+      exit 2
+    fi
+    [[ -n "${!env_name+x}" ]] || { echo "error: --pass-env variable is not set: $env_name" >&2; exit 2; }
+  done
+fi
+
+prompt=""
+if [[ ${#args[@]} -eq 1 && "${args[0]}" == "-" ]]; then
+  prompt=$(cat)
+else
+  prompt="${args[*]}"
+fi
+
+env_cmd=(/usr/bin/env)
+if [[ -n "$api_key" ]]; then
+  env_cmd+=("$api_key_env=$api_key")
+fi
+if [[ -n "$base_url" ]]; then
+  env_cmd+=("$base_url_env=$base_url")
+fi
+if [[ ${#pass_env[@]} -gt 0 ]]; then
+  for env_name in "${pass_env[@]}"; do
+    env_cmd+=("$env_name=${!env_name}")
+  done
+fi
+
+claude_args=(-p --output-format stream-json --permission-mode bypassPermissions)
+if [[ "$bare" -eq 1 ]]; then
+  claude_args+=(--bare)
+fi
+if [[ -n "$model" ]]; then
+  claude_args+=(--model "$model")
+fi
+if [[ -n "$settings" ]]; then
+  claude_args+=(--settings "$settings")
+fi
+if [[ -n "$session_id" ]]; then
+  claude_args+=(--resume "$session_id")
+elif [[ "$resume" -eq 1 ]]; then
+  claude_args+=(--continue)
+fi
+claude_args+=("$prompt")
+
+tmp_dir=$(mktemp -d /tmp/claude-sidecar.XXXXXX)
+out_file="$tmp_dir/output"
+monitor_log=""
+monitor_done=""
+
+cleanup() {
+  [[ -z "$monitor_done" ]] || touch "$monitor_done"
+  rm -rf "$tmp_dir"
+}
+trap cleanup EXIT
+
+if [[ "$monitor_enabled" -eq 1 ]]; then
+  monitor_log=$(mktemp /tmp/claude-sidecar-monitor.XXXXXX)
+  monitor_done="$monitor_log.done"
+  /usr/bin/osascript - "$monitor_log" "$monitor_done" <<'OSA' >/dev/null 2>&1 || true
+on run argv
+  set logFile to item 1 of argv
+  set doneFile to item 2 of argv
+  tell application "Terminal"
+    activate
+    do script "printf '\\nClaude sidecar output: " & quoted form of logFile & "\\n\\n'; touch " & quoted form of logFile & "; tail -f " & quoted form of logFile & " & tailpid=$!; while [ ! -f " & quoted form of doneFile & " ]; do sleep 0.25; done; kill $tailpid 2>/dev/null"
+  end tell
+end run
+OSA
+fi
+
+set +e
+(cd "$workdir" && "${env_cmd[@]}" "$claude_cmd" "${claude_args[@]}") >"$out_file" 2>&1
+exit_code=$?
+set -e
+
+if [[ "$json" -eq 1 ]]; then
+  rendered=$(cat "$out_file")
+else
+  rendered=$(python3 - "$out_file" <<'PY'
+import json
+import sys
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    try:
+        obj = json.loads(line)
+    except Exception:
+        print(line, end="")
+        continue
+    text = obj.get("result") or obj.get("message") or obj.get("content")
+    if isinstance(text, str) and text:
+        print(text)
+PY
+)
+fi
+
+if [[ -n "$monitor_log" ]]; then
+  printf '%s\n' "$rendered" | tee -a "$monitor_log"
+else
+  printf '%s\n' "$rendered"
+fi
+
+if [[ "$exit_code" -eq 0 && -z "$session_id" ]]; then
+  new_sid=$(python3 - "$out_file" <<'PY'
+import json, re, sys
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    try:
+        obj = json.loads(line)
+    except Exception:
+        continue
+    for key in ("session_id", "sessionId", "sessionID"):
+        value = obj.get(key)
+        if isinstance(value, str) and re.fullmatch(r"[0-9A-Za-z_-]{8,}", value):
+            print(value)
+            raise SystemExit
+PY
+)
+  if [[ -n "$new_sid" ]]; then
+    if [[ -n "$task_id" ]]; then
+      echo "workdir=${workdir} task_id=${task_id} session_id=${new_sid}" >> "$SESSION_FILE"
+    else
+      echo "workdir=${workdir} session_id=${new_sid}" >> "$SESSION_FILE"
+    fi
+  fi
+fi
+
+exit "$exit_code"

@@ -6,7 +6,7 @@ Delegate code reviews, debugging, research, and other bounded tasks without inte
 
 When the task finishes, the Terminal becomes an interactive `deepseek>` prompt for follow-ups. You can close it, check status by task ID, and resume the same session later.
 
-**No external proxy required. Bring your own DeepSeek key. Codex handles the rest. 🚀**
+**No third-party proxy required. Bring your own DeepSeek key; the included local proxy handles Codex Responses traffic. 🚀**
 
 
 <p align="center">
@@ -22,6 +22,7 @@ This skill is meant to be read and executed by Codex, not memorized by humans. O
 Install and configure https://github.com/Zedong-Liu/codex-deepseek-sidecar.
 I have a DeepSeek API key — ask me for it if it's not configured on this machine yet.
 If a local proxy or profile needs to be set up, handle that too.
+If using the included local proxy, start it and keep it running for sidecar tasks.
 Then launch a DeepSeek sidecar for this repo to handle long or log-heavy tasks.
 ```
 
@@ -43,7 +44,7 @@ Auto-dispatch for tests, log analysis, and broad exploration, then synthesize re
 ## ✨ Why use it
 
 - 💸 **Dramatically lower worker token cost** — shift repeated file reads, log inspection, test runs, and broad exploration from expensive GPT tokens to DeepSeek worker tokens. Many workflows target an **80–90% lower token cost**.
-- **No external proxy needed** — a small built-in Python proxy bridges Codex Responses API to DeepSeek Chat Completions.
+- **No third-party proxy needed** — a small built-in Python proxy bridges Codex Responses API to DeepSeek Chat Completions. When using the built-in profile, keep the local proxy process running.
 - **GPT stays the brain** — the expensive model handles planning, judgment, and synthesis; DeepSeek handles bounded worker tasks.
 - **Still Codex harness** — sidecars retain Codex file access, command execution, sessions, and evidence reporting.
 
@@ -82,16 +83,26 @@ These operational details belong in [SKILL.md](SKILL.md), not in front of human 
 
 ## 🔌 Built-in proxy
 
-The bundled `deepseek-responses-proxy` is intentionally minimal: Python stdlib only, localhost by default, designed for Codex's large request bodies. It bridges function tools and ignores Responses built-in tools that DeepSeek Chat does not support, returning a clear error if one is explicitly required.
+The bundled `deepseek-responses-proxy` is intentionally minimal: Python stdlib only, localhost by default, designed for Codex's large request bodies. It bridges function tools and ignores Responses built-in tools that DeepSeek Chat does not support, returning a clear error if one is explicitly required. For reusable startup, it can read the key from a private file with `--api-key-file`.
 
 If you already use VibeAround or another compatible provider, Codex can keep using that instead.
+
+## 🧩 Framework adapters
+
+Codex remains the main, stable entrypoint. Other framework adapters live in their own install surfaces so they do not change the Codex skill behavior:
+
+- `.opencode/` contains the OpenCode adapter and OpenCode skill.
+- `.claude-plugin/` plus `skills/claude-deepseek-sidecar/` contains the Claude Code adapter.
 
 ## 📦 Repo layout
 
 ```text
 .
+├── .claude-plugin/
+├── .opencode/
 ├── SKILL.md
 ├── agents/openai.yaml
+├── skills/claude-deepseek-sidecar/
 ├── scripts/codex-deepseek-sidecar
 ├── scripts/codex-deepseek-subagent
 ├── scripts/deepseek-responses-proxy

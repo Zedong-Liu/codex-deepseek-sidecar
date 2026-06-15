@@ -1,0 +1,8 @@
+{
+  "name": "codex-deepseek-sidecar-claude-adapter",
+  "version": "0.1.0",
+  "description": "Claude Code adapter instructions for launching DeepSeek sidecar tasks without changing the Codex skill entrypoint.",
+  "author": {
+    "name": "Zedong Liu"
+  }
+}

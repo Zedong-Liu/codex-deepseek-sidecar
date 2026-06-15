@@ -12,6 +12,8 @@ Before opening a pull request:
 bash -n scripts/codex-deepseek-sidecar
 bash -n scripts/codex-deepseek-subagent
 bash -n scripts/terminal-chat
+bash -n .opencode/scripts/deepseek-sidecar
+bash -n .claude-plugin/scripts/deepseek-sidecar
 python3 -m py_compile scripts/deepseek-responses-proxy
 scripts/deepseek-responses-proxy --self-test
 ```
@@ -19,7 +21,8 @@ scripts/deepseek-responses-proxy --self-test
 If you have `shellcheck` installed, also run:
 
 ```bash
-shellcheck scripts/codex-deepseek-sidecar scripts/codex-deepseek-subagent scripts/terminal-chat
+shellcheck scripts/codex-deepseek-sidecar scripts/codex-deepseek-subagent scripts/terminal-chat \
+  .opencode/scripts/deepseek-sidecar .claude-plugin/scripts/deepseek-sidecar
 ```
 
 ## Design Principles

@@ -5,6 +5,8 @@ description: Delegate self-contained side tasks to a DeepSeek-backed Codex CLI s
 
 # DeepSeek Codex Subagent (Community)
 
+This Codex skill remains the stable Codex entrypoint. OpenCode and Claude Code adapters live under `.opencode/` and `.claude-plugin/` and should follow their own framework instructions instead of changing the Codex workflow below.
+
 ## Installation
 
 Clone into `~/.codex/skills/`:
@@ -150,5 +152,5 @@ This skill only provides subagent session execution and lifecycle controls. The 
 ## Error recovery
 
 - **`tokio-runtime-worker` panic** or **`JoinError::Panic`** → infrastructure failure. Re-run with `--verbose-stderr` for diagnosis.
-- **`connectivity check failed`** → profile is misconfigured or provider is unreachable. Run `--configure` to repair, or use `--no-doctor-check` if the check is overly strict (e.g., proxy returns 404 on the probe route).
+- **`connectivity check failed`** → profile is misconfigured or the provider/proxy is not running. Start the relevant proxy/provider, run `deepseek-responses-proxy --status`, then run `codex doctor -c profile=<name> --json --summary`. Use `--no-doctor-check` only when you have independently verified the provider is reachable.
 - **`no previous session found`** → no recorded session for this workdir. Start a new session without `--resume`.

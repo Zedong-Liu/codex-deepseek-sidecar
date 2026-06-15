@@ -37,7 +37,7 @@ verbose_stderr=0
 status_only=0
 list_only=0
 monitor_enabled=1
-profile="deepseek"
+profile="ds-sidecar"
 configure_only=0
 doctor_check=1
 session_id=""
@@ -271,7 +271,7 @@ if [[ "$configure_only" -eq 1 ]]; then
         echo "Leaving the existing provider unchanged."
         echo "If this is a VibeAround or other provider profile, start that provider before using this sidecar."
         echo "To create a separate built-in-proxy profile, run:"
-        echo "  $0 --profile deepseek-sidecar --configure"
+        echo "  $0 --profile ds-sidecar-local --configure"
       fi
     fi
   else
@@ -287,8 +287,13 @@ if [[ "$configure_only" -eq 1 ]]; then
     echo "Wrote [model_providers.${profile}] to config.toml."
     echo ""
   fi
-  echo "If using the built-in local proxy, ensure it is running first:"
+  echo "If using the built-in local proxy, ensure it is running before sidecar tasks:"
   echo "  DEEPSEEK_API_KEY=... \"$SCRIPT_DIR/deepseek-responses-proxy\""
+  echo ""
+  echo "For reusable startup, store the key only if the user approves local disk storage:"
+  echo "  umask 077"
+  echo "  printf '%s\\n' '<DeepSeek API key>' > \"${HOME}/.codex/deepseek-sidecar.key\""
+  echo "  \"$SCRIPT_DIR/deepseek-responses-proxy\" --api-key-file \"${HOME}/.codex/deepseek-sidecar.key\""
   echo ""
   echo "Checking Codex config..."
   doctor_out=$("$CODEX_DOCTOR_BIN" doctor -c profile="$profile" --json --summary 2>&1) || true
@@ -304,7 +309,7 @@ if [[ "$configure_only" -eq 1 ]]; then
       echo "  \"$CODEX_DOCTOR_BIN\" doctor -c profile=\"$profile\" --json --summary" >&2
       echo "" >&2
       echo "If [profiles.${profile}] or [model_providers.${profile}] already existed and is not this sidecar profile, create a separate profile instead:" >&2
-      echo "  $0 --profile deepseek-sidecar --configure" >&2
+      echo "  $0 --profile ds-sidecar-local --configure" >&2
       exit 1
       ;;
   esac
