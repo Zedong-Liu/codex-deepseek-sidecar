@@ -2,7 +2,7 @@
 
 [English](README.en.md) | 中文
 
-用一句 prompt，让 Codex 自己启动 DeepSeek sidecar agents。
+用一句 prompt，让 Codex 自己启动 DeepSeek sidecar agents ——— 🔥 **现已支持 Codex、Claude Code 和 OpenCode**
 
 **不需要第三方代理。带上你自己的 DeepSeek key，内置本地代理会处理 Codex Responses 流量。🚀**
 
@@ -14,6 +14,7 @@
 <p align="center">
   <img src="assets/banner-zh.png" alt="codex-deepseek-sidecar" style="max-width:70%">
 </p>
+
 ## 🚀 一句话启动
 
 把这个仓库链接和下面这句话交给 Codex：
