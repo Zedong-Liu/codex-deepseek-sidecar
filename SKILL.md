@@ -99,6 +99,11 @@ reboot. Never resume one session concurrently.
 - The proxy supports text, function tools, streaming, cache usage, and thinking
   continuation for tool-call chains. It intentionally drops image data URIs;
   describe image findings in text instead of forwarding raw/base64 image input.
+- V4 Flash can serialize a tool call as native DSML text rather than an API
+  `tool_calls` field. The proxy converts both single- and double-delimiter DSML
+  blocks into structured function calls before Codex sees them; streaming text
+  is held until that check completes, so a tool request is never mistaken for a
+  final assistant answer.
 - Raw reasoning is hidden from Terminal output. It is preserved only when a
   tool-call continuation requires it; ordinary chat reasoning is discarded so
   it cannot inflate later prompts.

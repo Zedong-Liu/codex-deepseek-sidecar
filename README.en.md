@@ -86,7 +86,7 @@ These operational details belong in [SKILL.md](SKILL.md), not in front of human 
 
 ## 🔌 Built-in proxy
 
-The bundled `deepseek-responses-proxy` is intentionally minimal: Python stdlib only, localhost by default, designed for Codex's large request bodies. It bridges function tools and ignores Responses built-in tools that DeepSeek Chat does not support, returning a clear error if one is explicitly required. It connects only to the official `https://api.deepseek.com` API. Supply credentials from an environment variable or private key file; never commit a key or put one in a profile or prompt.
+The bundled `deepseek-responses-proxy` is intentionally minimal: Python stdlib only, localhost by default, designed for Codex's large request bodies. It bridges function tools; when V4 Flash emits a tool call as DSML text rather than an API `tool_calls` field, it restores the call to a structured function call before Codex sees it (including for streaming output), so a tool request cannot be mistaken for a final answer. It ignores Responses built-in tools that DeepSeek Chat does not support, returning a clear error if one is explicitly required. It connects only to the official `https://api.deepseek.com` API. Supply credentials from an environment variable or private key file; never commit a key or put one in a profile or prompt.
 
 ## 🛠️ Stable operation and sessions
 

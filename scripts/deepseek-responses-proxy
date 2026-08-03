@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import base64
+import html
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -24,6 +26,13 @@ DEFAULT_MAX_BODY = 128 * 1024 * 1024
 DEFAULT_TIMEOUT = 900
 MODELS = ("deepseek-v4-pro", "deepseek-v4-flash")
 REASONING_ENVELOPE_PREFIX = "deepseek-reasoning-v1:"
+# DeepSeek V4 documentation shows `｜DSML｜`; the official Flash endpoint can
+# emit the tokenizer's doubled delimiter `｜｜DSML｜｜` instead.
+DSML_TOKEN_PATTERN = r"(?:\|+|｜+)DSML(?:\|+|｜+)"
+DSML_TOOL_BLOCK_RE = re.compile(
+    rf"<(?P<token>{DSML_TOKEN_PATTERN})tool_calls>\s*(?P<body>.*?)\s*</(?P=token)tool_calls>",
+    re.DOTALL,
+)
 
 
 class ProxyRequestError(Exception):
@@ -148,6 +157,75 @@ def decode_reasoning(value: Any) -> str:
         return ""
 
 
+def recover_dsml_tool_calls(text: str) -> tuple[str, list[dict[str, str]]]:
+    """Decode DeepSeek V4's DSML fallback into OpenAI-style function calls.
+
+    The official API normally exposes `tool_calls`, but V4 Flash can emit its
+    native DSML tool block as plain content.  Treating that block as assistant
+    text makes Codex finish the turn without executing the requested tool.
+    """
+    matches = list(DSML_TOOL_BLOCK_RE.finditer(text))
+    if not matches:
+        return text, []
+
+    recovered: list[dict[str, str]] = []
+    visible: list[str] = []
+    cursor = 0
+    for match in matches:
+        token = match.group("token")
+        invoke_re = re.compile(
+            rf"<{re.escape(token)}invoke\s+name=(?P<quote>[\"'])(?P<name>.*?)(?P=quote)\s*>"
+            rf"\s*(?P<body>.*?)\s*</{re.escape(token)}invoke>",
+            re.DOTALL,
+        )
+        calls = list(invoke_re.finditer(match.group("body")))
+        if not calls:
+            return text, []
+        parsed_calls: list[dict[str, str]] = []
+        for call in calls:
+            parameters: dict[str, Any] = {}
+            parameter_re = re.compile(
+                rf"<{re.escape(token)}parameter\s+(?P<attrs>[^>]*)>"
+                rf"(?P<value>.*?)</{re.escape(token)}parameter>",
+                re.DOTALL,
+            )
+            for parameter in parameter_re.finditer(call.group("body")):
+                attrs = {
+                    name: value
+                    for name, _, value in re.findall(
+                        r"([A-Za-z_][A-Za-z0-9_]*)=([\"'])(.*?)\2", parameter.group("attrs")
+                    )
+                }
+                name = attrs.get("name")
+                if not name:
+                    return text, []
+                value = html.unescape(parameter.group("value").strip())
+                if attrs.get("string", "false").lower() == "true":
+                    parameters[name] = value
+                else:
+                    try:
+                        parameters[name] = json.loads(value)
+                    except json.JSONDecodeError:
+                        return text, []
+            name = html.unescape(call.group("name"))
+            if name.startswith("functions."):
+                name = name.removeprefix("functions.")
+            if not name:
+                return text, []
+            parsed_calls.append(
+                {
+                    "id": f"call_{uuid.uuid4().hex}",
+                    "name": name,
+                    "arguments": json_dumps(parameters),
+                }
+            )
+        visible.append(text[cursor : match.start()])
+        cursor = match.end()
+        recovered.extend(parsed_calls)
+    visible.append(text[cursor:])
+    return "".join(visible).strip(), recovered
+
+
 def reasoning_to_text(item: dict[str, Any]) -> str:
     preserved = decode_reasoning(item.get("encrypted_content"))
     if preserved:
@@ -168,8 +246,13 @@ def reasoning_to_text(item: dict[str, Any]) -> str:
     return str(item.get("reasoning_content") or item.get("text") or "")
 
 
-def append_function_call_message(messages: list[dict[str, Any]], item: dict[str, Any]) -> None:
+def append_function_call_message(
+    messages: list[dict[str, Any]],
+    item: dict[str, Any],
+    reasoning_by_call_id: dict[str, str] | None = None,
+) -> None:
     call_id = item.get("call_id") or item.get("id") or f"call_{uuid.uuid4().hex}"
+    preserved_reasoning = (reasoning_by_call_id or {}).get(str(call_id), "")
     tool_call = {
         "id": call_id,
         "type": "function",
@@ -180,8 +263,13 @@ def append_function_call_message(messages: list[dict[str, Any]], item: dict[str,
     }
     if messages and messages[-1].get("role") == "assistant":
         messages[-1].setdefault("tool_calls", []).append(tool_call)
+        if preserved_reasoning and not messages[-1].get("reasoning_content"):
+            messages[-1]["reasoning_content"] = preserved_reasoning
         return
-    messages.append({"role": "assistant", "content": None, "tool_calls": [tool_call]})
+    message: dict[str, Any] = {"role": "assistant", "content": None, "tool_calls": [tool_call]}
+    if preserved_reasoning:
+        message["reasoning_content"] = preserved_reasoning
+    messages.append(message)
 
 
 def normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -225,7 +313,9 @@ def normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return normalized
 
 
-def response_input_to_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
+def response_input_to_messages(
+    payload: dict[str, Any], reasoning_by_call_id: dict[str, str] | None = None
+) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     instructions = payload.get("instructions")
     if instructions:
@@ -252,16 +342,19 @@ def response_input_to_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
         item_type = item.get("type")
         role = item.get("role")
         if item_type == "function_call_output":
+            call_id = str(item.get("call_id") or item.get("id") or "call_0")
             messages.append(
                 {
                     "role": "tool",
-                    "tool_call_id": item.get("call_id") or item.get("id") or "call_0",
+                    "tool_call_id": call_id,
                     "content": content_to_text(item.get("output", "")),
                 }
             )
+            if reasoning_by_call_id is not None:
+                reasoning_by_call_id.pop(call_id, None)
             continue
         if item_type == "function_call":
-            append_function_call_message(messages, item)
+            append_function_call_message(messages, item, reasoning_by_call_id)
             continue
         if item_type == "reasoning":
             reasoning = reasoning_to_text(item)
@@ -409,9 +502,11 @@ def runtime_identity_instruction(model: str) -> str:
     )
 
 
-def responses_to_chat(payload: dict[str, Any], *, beta: bool = False) -> dict[str, Any]:
+def responses_to_chat(
+    payload: dict[str, Any], *, beta: bool = False, reasoning_by_call_id: dict[str, str] | None = None
+) -> dict[str, Any]:
     model = str(payload.get("model", MODELS[0]))
-    messages = response_input_to_messages(payload)
+    messages = response_input_to_messages(payload, reasoning_by_call_id)
     identity = runtime_identity_instruction(model)
     if messages and messages[0].get("role") == "system":
         existing = str(messages[0].get("content") or "")
@@ -487,6 +582,16 @@ def chat_to_response(payload: dict[str, Any], model: str) -> dict[str, Any]:
     output_text = message.get("content") or ""
     reasoning_content = message.get("reasoning_content") or ""
     tool_calls = message.get("tool_calls") or []
+    if not tool_calls and output_text:
+        output_text, recovered_calls = recover_dsml_tool_calls(output_text)
+        if recovered_calls:
+            tool_calls = [
+                {
+                    "id": call["id"],
+                    "function": {"name": call["name"], "arguments": call["arguments"]},
+                }
+                for call in recovered_calls
+            ]
     # DeepSeek requires reasoning replay only across tool-call turns. Returning
     # it for ordinary chat makes Codex resend a large, ignored chain of thought
     # on every subsequent user message.
@@ -720,7 +825,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def handle_responses(self, payload: dict[str, Any], *, beta: bool) -> None:
         try:
-            chat_payload = responses_to_chat(payload, beta=beta)
+            chat_payload = responses_to_chat(
+                payload, beta=beta, reasoning_by_call_id=self.server.reasoning_by_call_id
+            )
         except ProxyRequestError as exc:
             self.send_error_json(exc.status, str(exc))
             return
@@ -732,7 +839,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
             data = upstream.read()
             chat_response = json.loads(data.decode("utf-8"))
             self.server.metrics.usage(chat_response.get("usage") or {})
-            self.send_json(200, chat_to_response(chat_response, chat_payload["model"]))
+            response_payload = chat_to_response(chat_response, chat_payload["model"])
+            reasoning = str(((chat_response.get("choices") or [{}])[0].get("message") or {}).get("reasoning_content") or "")
+            if reasoning:
+                for item in response_payload["output"]:
+                    if item.get("type") == "function_call":
+                        self.server.reasoning_by_call_id[str(item["call_id"])] = reasoning
+            self.send_json(200, response_payload)
         except urllib.error.HTTPError as exc:
             self.forward_upstream_error(exc)
         except Exception as exc:
@@ -833,43 +946,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 reasoning_content += str(delta["reasoning_content"])
             content = delta.get("content")
             if content:
-                if text_output_index is None:
-                    text_output_index = next_output_index
-                    next_output_index += 1
-                    text_item_id = f"msg_{uuid.uuid4().hex}"
-                    self.sse(
-                        "response.output_item.added",
-                        {
-                            "type": "response.output_item.added",
-                            "output_index": text_output_index,
-                            "item": {
-                                "type": "message",
-                                "id": text_item_id,
-                                "status": "in_progress",
-                                "role": "assistant",
-                                "content": [],
-                            },
-                        },
-                    )
-                    self.sse(
-                        "response.content_part.added",
-                        {
-                            "type": "response.content_part.added",
-                            "output_index": text_output_index,
-                            "content_index": 0,
-                            "part": {"type": "output_text", "text": "", "annotations": []},
-                        },
-                    )
                 text += content
-                self.sse(
-                    "response.output_text.delta",
-                    {
-                        "type": "response.output_text.delta",
-                        "output_index": text_output_index,
-                        "content_index": 0,
-                        "delta": content,
-                    },
-                )
 
             for tool_call in delta.get("tool_calls") or []:
                 idx = int(tool_call.get("index", 0))
@@ -910,6 +987,70 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             "delta": function["arguments"],
                         },
                     )
+
+        if not tool_calls and text:
+            text, recovered_calls = recover_dsml_tool_calls(text)
+            for call in recovered_calls:
+                idx = len(tool_calls)
+                tool_indexes[idx] = next_output_index
+                next_output_index += 1
+                tool_calls[idx] = {
+                    "item_id": f"fc_{uuid.uuid4().hex}",
+                    "call_id": call["id"],
+                    "name": call["name"],
+                    "arguments": call["arguments"],
+                }
+                self.sse(
+                    "response.output_item.added",
+                    {
+                        "type": "response.output_item.added",
+                        "output_index": tool_indexes[idx],
+                        "item": {
+                            "type": "function_call",
+                            "id": tool_calls[idx]["item_id"],
+                            "call_id": tool_calls[idx]["call_id"],
+                            "name": tool_calls[idx]["name"],
+                            "arguments": tool_calls[idx]["arguments"],
+                            "status": "in_progress",
+                        },
+                    },
+                )
+                self.sse(
+                    "response.function_call_arguments.delta",
+                    {
+                        "type": "response.function_call_arguments.delta",
+                        "output_index": tool_indexes[idx],
+                        "delta": tool_calls[idx]["arguments"],
+                    },
+                )
+
+        if text:
+            text_output_index = next_output_index
+            next_output_index += 1
+            text_item_id = f"msg_{uuid.uuid4().hex}"
+            self.sse(
+                "response.output_item.added",
+                {
+                    "type": "response.output_item.added",
+                    "output_index": text_output_index,
+                    "item": {
+                        "type": "message",
+                        "id": text_item_id,
+                        "status": "in_progress",
+                        "role": "assistant",
+                        "content": [],
+                    },
+                },
+            )
+            self.sse(
+                "response.content_part.added",
+                {
+                    "type": "response.content_part.added",
+                    "output_index": text_output_index,
+                    "content_index": 0,
+                    "part": {"type": "output_text", "text": "", "annotations": []},
+                },
+            )
 
         if text_output_index is not None:
             text_item = {
@@ -972,6 +1113,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 },
             )
             completed_output.append(tool_item)
+            if reasoning_content:
+                self.server.reasoning_by_call_id[item["call_id"]] = reasoning_content
         if reasoning_content and tool_calls:
             reasoning_item = {
                 "type": "reasoning",
@@ -1025,6 +1168,20 @@ def self_test() -> int:
     ) == "keep"
     envelope = encode_reasoning("private continuation")
     assert reasoning_to_text({"encrypted_content": envelope}) == "private continuation"
+    dsml = (
+        '<｜DSML｜tool_calls>\n'
+        '<｜DSML｜invoke name="functions.exec_command">\n'
+        '<｜DSML｜parameter name="cmd" string="true">pwd</｜DSML｜parameter>\n'
+        '</｜DSML｜invoke>\n'
+        '</｜DSML｜tool_calls>'
+    )
+    visible, recovered = recover_dsml_tool_calls(dsml)
+    assert visible == ""
+    assert recovered[0]["name"] == "exec_command"
+    assert json.loads(recovered[0]["arguments"]) == {"cmd": "pwd"}
+    doubled_dsml = dsml.replace("｜DSML｜", "｜｜DSML｜｜")
+    _, doubled_recovered = recover_dsml_tool_calls(doubled_dsml)
+    assert doubled_recovered[0]["name"] == "exec_command"
     request = {
         "model": MODELS[0],
         "instructions": "Be concise.",
@@ -1108,6 +1265,18 @@ def self_test() -> int:
     )
     assert continued[0]["reasoning_content"] == "Need a tool."
     assert continued[0]["tool_calls"][0]["function"]["name"] == "shell"
+    tool_reasoning = {"call_4": "Required tool reasoning."}
+    replayed_tool_turn = response_input_to_messages(
+        {
+            "input": [
+                {"type": "function_call", "call_id": "call_4", "name": "shell", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_4", "output": "ok"},
+            ]
+        },
+        tool_reasoning,
+    )
+    assert replayed_tool_turn[0]["reasoning_content"] == "Required tool reasoning."
+    assert tool_reasoning == {}
     resumed = response_input_to_messages(
         {
             "input": [
@@ -1145,6 +1314,12 @@ def self_test() -> int:
     assert response["usage"]["input_tokens"] == 3
     assert response["usage"]["input_tokens_details"]["cached_tokens"] == 2
     assert response["output"][0]["type"] == "message"
+    dsml_response = chat_to_response(
+        {"choices": [{"message": {"content": dsml}}]}, MODELS[0]
+    )
+    assert dsml_response["output_text"] == ""
+    assert dsml_response["output"][0]["type"] == "function_call"
+    assert dsml_response["output"][0]["name"] == "exec_command"
     print("self-test passed")
     return 0
 
@@ -1201,6 +1376,9 @@ def main(argv: list[str]) -> int:
     server.max_body_bytes = args.max_body_mb * 1024 * 1024
     server.quiet = args.quiet
     server.metrics = ProxyMetrics()
+    # Retain thinking only until the matching tool output is translated. This
+    # stays in memory and never reaches metrics, logs, or session files.
+    server.reasoning_by_call_id: dict[str, str] = {}
     print(f"deepseek-responses-proxy listening on http://{args.host}:{args.port}/v1", flush=True)
     print(f"upstream: {args.upstream}/chat/completions", flush=True)
     try:

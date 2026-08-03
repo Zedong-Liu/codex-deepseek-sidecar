@@ -86,7 +86,7 @@
 
 ## 🔌 内置代理
 
-内置的 `deepseek-responses-proxy` 刻意保持很小：只用 Python 标准库，默认只监听本地，并针对 Codex 的大请求体设计。它会桥接 function tools，并忽略 Codex 默认附带但 DeepSeek Chat 不支持的 Responses built-in tools；如果请求明确要求某个不支持的 built-in tool，则返回明确的错误。代理只连接官方 `https://api.deepseek.com`，可通过环境变量或私有 key 文件取得凭据；不要把 key 放进仓库、profile 或 prompt。
+内置的 `deepseek-responses-proxy` 刻意保持很小：只用 Python 标准库，默认只监听本地，并针对 Codex 的大请求体设计。它会桥接 function tools；对于 V4 Flash 偶尔以 DSML 文本而非 API `tool_calls` 字段返回的工具调用，代理会在输出给 Codex 前还原为真实结构化调用（流式输出也会先完成此检查），不会把工具调用误显示为最终回答。它还会忽略 Codex 默认附带但 DeepSeek Chat 不支持的 Responses built-in tools；如果请求明确要求某个不支持的 built-in tool，则返回明确的错误。代理只连接官方 `https://api.deepseek.com`，可通过环境变量或私有 key 文件取得凭据；不要把 key 放进仓库、profile 或 prompt。
 
 ## 🛠️ 稳定运行与会话
 
