@@ -86,9 +86,34 @@
 
 ## 🔌 内置代理
 
-内置的 `deepseek-responses-proxy` 刻意保持很小：只用 Python 标准库，默认只监听本地，并针对 Codex 的大请求体设计。它会桥接 function tools，并忽略 Codex 默认附带但 DeepSeek Chat 不支持的 Responses built-in tools；如果请求明确要求某个不支持的 built-in tool，则返回明确的错误。需要长期复用时，它也可以通过 `--api-key-file` 从私有文件读取 key。
+内置的 `deepseek-responses-proxy` 刻意保持很小：只用 Python 标准库，默认只监听本地，并针对 Codex 的大请求体设计。它会桥接 function tools，并忽略 Codex 默认附带但 DeepSeek Chat 不支持的 Responses built-in tools；如果请求明确要求某个不支持的 built-in tool，则返回明确的错误。代理只连接官方 `https://api.deepseek.com`，可通过环境变量或私有 key 文件取得凭据；不要把 key 放进仓库、profile 或 prompt。
 
-如果你已经在用 VibeAround 或其他兼容 provider，Codex 也可以继续使用原来的方案。
+## 🛠️ 稳定运行与会话
+
+首次使用时先在你的 secret manager 或用户级 LaunchAgent 中提供
+`DEEPSEEK_API_KEY` 并启动本地代理，然后运行：
+
+```bash
+scripts/codex-deepseek-subagent --configure
+curl -fsS http://127.0.0.1:12359/v1/ready
+```
+
+默认 profile 是稳定 API 上的 DeepSeek V4 Pro。对边界清晰的低成本任务可选
+Flash；`--effort high|max` 会选择官方思考强度，且保存的 session 会记住选用的
+profile 与强度：
+
+```bash
+# 清晰、只读、范围有限的排查
+scripts/codex-deepseek-subagent --profile ds-sidecar-flash --effort high --cd "$PWD" "<task>"
+
+# 有限但分支较多的诊断或小修复
+scripts/codex-deepseek-subagent --profile ds-sidecar-flash --effort max --cd "$PWD" "<task>"
+```
+
+每次执行会打开 Terminal 监视窗口，显示由 wrapper 校验的 model、effort、profile、
+实时输出和 `deepseek >` 后续对话提示。原始 reasoning 不会显示给用户；仅在工具调用
+续接所必需时由代理不透明地保存。`/metrics` 只提供 aggregate cache hit/miss，不泄露
+prompt、工具参数或 key。升级 Codex 后重新运行 `--configure`，它会刷新本地模型元数据。
 
 ## 🧩 框架适配
 
@@ -109,6 +134,7 @@ Codex 仍然是主线稳定入口。其他框架适配放在各自安装面里�
 ├── scripts/codex-deepseek-sidecar
 ├── scripts/codex-deepseek-subagent
 ├── scripts/deepseek-responses-proxy
+├── scripts/refresh-codex-model-catalog
 └── scripts/terminal-chat
 ```
 

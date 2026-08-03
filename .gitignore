@@ -10,3 +10,10 @@ tmp/
 # Test scratch files
 .cache/
 coverage/
+
+# Credentials and local provider configuration
+.env
+.env.*
+*.key
+*.pem
+secrets/

@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Build local DeepSeek model metadata from the installed Codex catalog."""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import datetime as dt
+import json
+import os
+import pathlib
+import tempfile
+from typing import Any
+
+
+HOME = pathlib.Path.home()
+DEFAULT_SOURCE = HOME / ".codex" / "models_cache.json"
+DEFAULT_OUTPUT = HOME / ".codex" / "models.ds-sidecar.json"
+MODELS = (
+    ("deepseek-v4-pro", "DeepSeek V4 Pro", "Default official DeepSeek coding and reasoning model."),
+    ("deepseek-v4-flash", "DeepSeek V4 Flash", "Fast official DeepSeek model for bounded side tasks."),
+)
+
+
+def catalog_template(source: pathlib.Path) -> dict[str, Any]:
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    for item in payload.get("models", []):
+        if item.get("slug") == "gpt-5.6-sol":
+            return item
+    raise RuntimeError("installed Codex model cache did not contain gpt-5.6-sol")
+
+
+def deepseek_model(template: dict[str, Any], slug: str, display_name: str, description: str) -> dict[str, Any]:
+    model = copy.deepcopy(template)
+    model.update(
+        {
+            "slug": slug,
+            "display_name": display_name,
+            "description": description,
+            "context_window": 1048576,
+            "max_context_window": 1048576,
+            "auto_compact_token_limit": 600000,
+            "effective_context_window_percent": 65,
+            "input_modalities": ["text"],
+            "supports_image_detail_original": False,
+            "supports_search_tool": False,
+            "supported_in_api": True,
+        }
+    )
+    return model
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", type=pathlib.Path, default=DEFAULT_SOURCE)
+    parser.add_argument("--output", type=pathlib.Path, default=DEFAULT_OUTPUT)
+    args = parser.parse_args()
+
+    template = catalog_template(args.source.expanduser())
+    payload = {
+        "fetched_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+        "client_version": "local-sidecar",
+        "models": [deepseek_model(template, *model) for model in MODELS],
+    }
+    output = args.output.expanduser()
+    output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=output.parent, delete=False, prefix=f".{output.name}."
+    ) as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+        temporary = pathlib.Path(handle.name)
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, output)
+    print(f"refreshed {output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

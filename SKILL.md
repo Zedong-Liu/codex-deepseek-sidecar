@@ -1,156 +1,123 @@
 ---
 name: deepseek-codex-subagent
-description: Delegate self-contained side tasks to a DeepSeek-backed Codex CLI subagent through a clean-environment wrapper with persistent sessions and an interactive Terminal chat window. Use for independent exploration, code review, debugging, log inspection, implementation attempts, or benchmark supervision where DeepSeek can work from a clear brief.
+description: Delegate bounded side tasks to a DeepSeek-backed Codex CLI subagent through the official DeepSeek API, persistent sessions, and an interactive Terminal monitor.
 ---
 
-# DeepSeek Codex Subagent (Community)
+# DeepSeek Codex Subagent
 
-This Codex skill remains the stable Codex entrypoint. OpenCode and Claude Code adapters live under `.opencode/` and `.claude-plugin/` and should follow their own framework instructions instead of changing the Codex workflow below.
+Use the stable entrypoint; never handwrite a `codex exec` invocation:
 
-## Installation
+```bash
+<skill-dir>/scripts/codex-deepseek-subagent
+```
 
-Clone into `~/.codex/skills/`:
+It forwards to the official-API wrapper, which uses a local Responses-to-Chat
+bridge on `127.0.0.1:12359`. It does not use VibeAround or another third-party
+gateway.
+
+## Installation and safe setup
 
 ```bash
 git clone <repo-url> ~/.codex/skills/deepseek-codex-subagent
 cd ~/.codex/skills/deepseek-codex-subagent
 chmod +x scripts/*
+ln -sf "$PWD/scripts/codex-deepseek-subagent" ~/.codex/bin/codex-deepseek-subagent
 ```
 
-Optional symlink for shorter invocation:
+Start the local proxy with a user-managed secret source. Do not put an API key
+in a repository, prompt, shell history, or profile file. For development:
 
 ```bash
-ln -s ~/.codex/skills/deepseek-codex-subagent/scripts/codex-deepseek-subagent \
-  ~/.codex/bin/codex-deepseek-subagent
+DEEPSEEK_API_KEY="..." scripts/deepseek-responses-proxy
 ```
 
-## Prerequisites
-
-A working DeepSeek profile in `~/.codex/config.toml`. Run `--configure` once to set it up interactively (detects VibeAround proxy on `127.0.0.1:12358` or instructs CC switch setup), then verifies connectivity with `codex doctor`.
+For login startup, use a user LaunchAgent or secret manager. If the agent uses
+a non-default launchd label, set `DEEPSEEK_SIDECAR_LAUNCHD_LABEL` before running
+the wrapper. Then generate/validate the profiles:
 
 ```bash
-"<path-to-skill>/scripts/codex-deepseek-subagent" --configure
+scripts/codex-deepseek-subagent --configure
+curl -fsS http://127.0.0.1:12359/v1/ready
 ```
 
-## Workflow
+`--configure` refreshes a local model catalog from the installed Codex cache;
+run it after a Codex upgrade.
 
-Each execution opens a Terminal window that shows live task output, then becomes a `deepseek>` follow-up prompt. Type `/exit` to leave the session idle for later resume.
+## Profiles and effort
 
-Set one stable project path and keep it across workflow steps:
+| Profile | Model / route | Use |
+| --- | --- | --- |
+| `ds-sidecar-local` | `deepseek-v4-pro`, stable API | Default for complex coding and correctness-sensitive work. |
+| `ds-sidecar-flash` | `deepseek-v4-flash`, stable API | Fast, low-cost bounded investigation. |
+| `ds-sidecar-beta` | `deepseek-v4-pro`, `/beta` API | Opt-in only for beta strict function schemas. |
+
+Use Flash `high` for clear, bounded work. Use Flash `max` only for a limited
+but branching diagnosis or small implementation. Start a new Pro session if the
+scope becomes cross-cutting, long-context, or high risk.
 
 ```bash
 PROJECT="/absolute/path/to/project"
+
+# Fast inspection
+scripts/codex-deepseek-subagent --profile ds-sidecar-flash --effort high \
+  --cd "$PROJECT" "Inspect the failing test and report evidence. Do not edit."
+
+# Bounded multi-file diagnosis
+scripts/codex-deepseek-subagent --profile ds-sidecar-flash --effort max \
+  --cd "$PROJECT" "Find the root cause, implement the smallest fix, and run its tests."
 ```
 
-### 1. Start a new session
+## Session workflow
+
+Every interactive execution opens a Terminal view with a wrapper-verified
+model, effective effort, profile, project, live output, and a Readline-backed
+`deepseek >` prompt after completion. The displayed route—not a model
+self-report—is authoritative.
 
 ```bash
-"<path-to-skill>/scripts/codex-deepseek-subagent" --cd "$PROJECT" \
-  "Explore relevant implementations. Report key files, conclusions, and next steps."
+# Start a named session.
+scripts/codex-deepseek-subagent --cd "$PROJECT" --task-id review-auth \
+  "Review the auth module. Report files, evidence, and next steps."
+
+# Check without a model request.
+scripts/codex-deepseek-subagent --cd "$PROJECT" --task-id review-auth --status
+
+# Resume an idle session. Its recorded profile and effort are restored unless
+# explicitly overridden.
+scripts/codex-deepseek-subagent --cd "$PROJECT" --task-id review-auth --resume \
+  "Continue from the existing evidence and report the result."
 ```
 
-A session ID is recorded to `/tmp/deepseek-subagent-sessions.txt` keyed by workdir.
+Use `/exit` in Terminal to leave a session idle. Use `--no-monitor` only for
+automation. Session mappings are stored under
+`~/.codex/state/deepseek-sidecar/` with user-only permissions and survive
+reboot. Never resume one session concurrently.
 
-For parallel subagents in the same project, assign a stable task ID:
+## Safety and transport boundary
+
+- Use the official route: `127.0.0.1:12359 -> https://api.deepseek.com`.
+- The proxy supports text, function tools, streaming, cache usage, and thinking
+  continuation for tool-call chains. It intentionally drops image data URIs;
+  describe image findings in text instead of forwarding raw/base64 image input.
+- Raw reasoning is hidden from Terminal output. It is preserved only when a
+  tool-call continuation requires it; ordinary chat reasoning is discarded so
+  it cannot inflate later prompts.
+- Built-in hosted Responses tools are unsupported. Function tools are the
+  supported bridge surface.
+- Pass a task variable only when needed: `--pass-env NAME`. Do not pass the
+  DeepSeek credential to delegated processes.
+
+## Health and upgrade check
 
 ```bash
-"<path-to-skill>/scripts/codex-deepseek-subagent" --cd "$PROJECT" \
-  --task-id review-auth \
-  "Review the auth module. Report findings with file and line references."
+curl -fsS http://127.0.0.1:12359/v1/ready
+curl -fsS http://127.0.0.1:12359/v1/metrics
+scripts/codex-deepseek-subagent --configure
+scripts/codex-deepseek-subagent --cd "$PROJECT" --task-id sidecar-upgrade-smoke \
+  --no-monitor "Reply exactly SIDECAR_OK. Do not use tools."
 ```
 
-### 2. Check session status before follow-ups
-
-```bash
-"<path-to-skill>/scripts/codex-deepseek-subagent" --cd "$PROJECT" --status
-```
-
-Check a named task:
-
-```bash
-"<path-to-skill>/scripts/codex-deepseek-subagent" --cd "$PROJECT" \
-  --task-id review-auth --status
-```
-
-List recorded sessions for the project:
-
-```bash
-"<path-to-skill>/scripts/codex-deepseek-subagent" --cd "$PROJECT" --list
-```
-
-| Status | Action |
-| ------ | ------ |
-| `running` | Wait. Never resume a running session concurrently. |
-| `idle` | Continue with `--resume` (step 3). |
-| `missing` | No recorded session for this directory. Start new (step 1). |
-| `untracked` | Session ID is known but lacks a workdir record. Resume with `--session-id <UUID> --cd <DIR>`. |
-
-### 3. Resume an idle session
-
-```bash
-"<path-to-skill>/scripts/codex-deepseek-subagent" --cd "$PROJECT" --resume \
-  "Continue with existing context; run verification and report results."
-```
-
-Resume a named task:
-
-```bash
-"<path-to-skill>/scripts/codex-deepseek-subagent" --cd "$PROJECT" \
-  --task-id review-auth --resume \
-  "Continue with existing context; run verification and report results."
-```
-
-Resume a specific session by ID from any directory:
-
-```bash
-"<path-to-skill>/scripts/codex-deepseek-subagent" --session-id <UUID> \
-  "Continue the task and report results."
-```
-
-## Flags
-
-| Flag | Effect |
-| ---- | ------ |
-| `--profile NAME` | Codex profile (default `ds-sidecar`). |
-| `--configure` | Interactive profile setup + doctor verification. No prompt. |
-| `--cd DIR` | Workdir for new sessions and `--status` / `--resume` lookup. |
-| `--task-id NAME` | Name a task within `--cd DIR` for later `--status` / `--resume` lookup. Use letters, numbers, `.`, `_`, `:`, or `-`. |
-| `--resume`, `-r` | Resume latest session for `--cd DIR`. |
-| `--session-id UUID` | Resume a specific session. |
-| `--status` | Report `running`/`idle`/`missing`/`untracked`. No model request. |
-| `--list` | List recorded sessions for `--cd DIR`, optionally filtered by `--task-id`. No model request. |
-| `--json` | JSONL event stream. |
-| `--pass-env NAME` | Copy one UTF-8 env var into the isolated child. Repeatable. |
-| `--no-monitor` | Suppress Terminal window (automation runs). |
-| `--no-doctor-check` | Skip pre-flight `codex doctor` connectivity check. |
-| `--verbose-stderr` | Show normally-filtered Codex startup warnings. |
-| `-` | Read prompt from stdin. |
-
-The wrapper isolates environment variables. Pass only what the task needs:
-
-```bash
-API_KEY="$SOME_SECRET" \
-  "<path-to-skill>/scripts/codex-deepseek-subagent" \
-  --cd "$PROJECT" --pass-env API_KEY "Run specified tests and report output."
-```
-
-## Prompt shape
-
-Give the subagent a self-contained brief:
-
-```
-Task: [concrete, bounded goal]
-Context: [paths, error snippet, constraints]
-Expected: [conclusion, evidence, patch/test references if code was edited]
-Constraints: [read-only scope, or explicit permission to edit/run tests]
-```
-
-Use the Terminal `deepseek>` prompt only after the subagent's initial task completes — the session persists and the window remains interactive.
-
-This skill only provides subagent session execution and lifecycle controls. The calling agent is responsible for task decomposition, coordination, result synthesis, and deciding whether edits are allowed. For multiple concurrent subagents in one repository, prefer `--task-id` or the returned `--session-id`; do not rely on bare `--resume --cd` because it resumes the latest recorded session for that workdir.
-
-## Error recovery
-
-- **`tokio-runtime-worker` panic** or **`JoinError::Panic`** → infrastructure failure. Re-run with `--verbose-stderr` for diagnosis.
-- **`connectivity check failed`** → profile is misconfigured or the provider/proxy is not running. Start the relevant proxy/provider, run `deepseek-responses-proxy --status`, then run `codex doctor -c profile=<name> --json --summary`. Use `--no-doctor-check` only when you have independently verified the provider is reachable.
-- **`no previous session found`** → no recorded session for this workdir. Start a new session without `--resume`.
+`/metrics` contains aggregate cache hit/miss counts only, never prompt, tool,
+or credential data. Cache matching is best effort and requires a repeated
+prefix; use a new session when an old diagnostic session has accumulated
+unrelated history.

@@ -8,10 +8,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 usage() {
   cat <<'EOF'
 Usage:
-  codex-deepseek-sidecar [--profile NAME] [--cd DIR] [--task-id NAME] [--json] [--resume] [--session-id ID] [--pass-env NAME] [--no-monitor] [--verbose-stderr] [--no-doctor-check] PROMPT...
-  codex-deepseek-sidecar [--profile NAME] [--cd DIR] [--task-id NAME] [--json] [--resume] [--session-id ID] [--pass-env NAME] [--no-monitor] [--verbose-stderr] [--no-doctor-check] -
-  codex-deepseek-sidecar [--profile NAME] [--cd DIR] [--task-id NAME] [--session-id ID] --status
-  codex-deepseek-sidecar [--profile NAME] [--cd DIR] [--task-id NAME] --list
+  codex-deepseek-sidecar [--profile NAME] [--effort high|max] [--cd DIR] [--task-id NAME] [--json] [--resume] [--session-id ID] [--pass-env NAME] [--no-monitor] [--verbose-stderr] [--no-doctor-check] PROMPT...
+  codex-deepseek-sidecar [--profile NAME] [--effort high|max] [--cd DIR] [--task-id NAME] [--json] [--resume] [--session-id ID] [--pass-env NAME] [--no-monitor] [--verbose-stderr] [--no-doctor-check] -
+  codex-deepseek-sidecar [--profile NAME] [--effort high|max] [--cd DIR] [--task-id NAME] [--session-id ID] --status
+  codex-deepseek-sidecar [--profile NAME] [--effort high|max] [--cd DIR] [--task-id NAME] --list
   codex-deepseek-sidecar [--profile NAME] --configure
 
 Runs Codex CLI as a DeepSeek-backed sidecar in a clean UTF-8 environment.
@@ -23,6 +23,7 @@ With --task-id NAME, records and looks up a named task within the working direct
 Use --status before follow-ups to report whether a recorded session is running or idle.
 Use --list to show recorded sessions for the working directory.
 Use --pass-env NAME repeatedly for task variables that the sidecar must inherit.
+Use --effort high|max to override the profile's DeepSeek reasoning effort.
 Use --no-monitor for non-interactive runs that should not open Terminal.
 Use --verbose-stderr to display known harmless Codex startup warnings.
 Use --no-doctor-check to skip the pre-flight connectivity check.
@@ -37,7 +38,10 @@ verbose_stderr=0
 status_only=0
 list_only=0
 monitor_enabled=1
-profile="ds-sidecar"
+profile="ds-sidecar-local"
+profile_explicit=0
+effort=""
+effort_explicit=0
 configure_only=0
 doctor_check=1
 session_id=""
@@ -54,7 +58,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --profile|-p)
       [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
-      profile="$2"; shift 2 ;;
+      profile="$2"; profile_explicit=1; shift 2 ;;
+    --effort)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      effort="$2"; effort_explicit=1; shift 2 ;;
     --resume|-r)
       resume=1
       shift
@@ -131,6 +138,10 @@ if [[ -n "$task_id" && ! "$task_id" =~ ^[A-Za-z0-9][A-Za-z0-9_.:-]*$ ]]; then
   echo "  Use letters, numbers, dot, underscore, colon, or dash; start with a letter or number." >&2
   exit 2
 fi
+if [[ -n "$effort" && "$effort" != "high" && "$effort" != "max" ]]; then
+  echo "error: --effort must be high or max" >&2
+  exit 2
+fi
 
 # Helper: parse codex doctor JSON for critical check failures
 parse_doctor() {
@@ -205,6 +216,118 @@ sys.exit(1)
 PY
 }
 
+profile_value() {
+  local profile_path="$1"
+  local key="$2"
+  [[ -f "$profile_path" ]] || return 1
+  python3 - "$profile_path" "$key" <<'PY'
+import re
+import sys
+
+path, key = sys.argv[1:]
+pattern = re.compile(r"^\s*" + re.escape(key) + r"\s*=\s*(.+?)\s*(?:#.*)?$")
+try:
+    lines = open(path, encoding="utf-8").read().splitlines()
+except OSError:
+    sys.exit(1)
+for line in lines:
+    match = pattern.match(line)
+    if not match:
+        continue
+    value = match.group(1).strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '\"'):
+        value = value[1:-1]
+    print(value)
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
+profile_defaults() {
+  case "$profile" in
+    ds-sidecar-local) printf '%s\n' "ds-sidecar-local" "deepseek-v4-pro" "high" ;;
+    ds-sidecar-flash) printf '%s\n' "ds-sidecar-local" "deepseek-v4-flash" "high" ;;
+    ds-sidecar-beta) printf '%s\n' "ds-sidecar-beta" "deepseek-v4-pro" "high" ;;
+    *) printf '%s\n' "$profile" "deepseek-v4-pro" "high" ;;
+  esac
+}
+
+validate_sidecar_profile() {
+  CONFIG_TOML="${HOME}/.codex/config.toml"
+  PROFILE_TOML="${HOME}/.codex/${profile}.config.toml"
+  [[ -f "$PROFILE_TOML" ]] || { echo "error: missing sidecar profile: $PROFILE_TOML" >&2; return 1; }
+  profile_provider=$(profile_value "$PROFILE_TOML" "model_provider" 2>/dev/null || true)
+  profile_model=$(profile_value "$PROFILE_TOML" "model" 2>/dev/null || true)
+  profile_effort=$(profile_value "$PROFILE_TOML" "model_reasoning_effort" 2>/dev/null || true)
+  [[ -n "$profile_provider" && -n "$profile_model" && -n "$profile_effort" ]] || {
+    echo "error: profile must define model_provider, model, and model_reasoning_effort: $PROFILE_TOML" >&2
+    return 1
+  }
+  if [[ "$profile_effort" != "high" && "$profile_effort" != "max" ]]; then
+    echo "error: profile '$profile' must use DeepSeek reasoning effort high or max" >&2
+    return 1
+  fi
+  provider_base_url=$(config_section_value "model_providers.${profile_provider}" "base_url" 2>/dev/null || true)
+  provider_wire_api=$(config_section_value "model_providers.${profile_provider}" "wire_api" 2>/dev/null || true)
+  if [[ "$provider_base_url" != http://127.0.0.1:12359/* || "$provider_wire_api" != "responses" ]]; then
+    echo "error: profile '$profile' must use a local DeepSeek Responses provider on 127.0.0.1:12359" >&2
+    return 1
+  fi
+}
+
+ensure_local_proxy_running() {
+  local health_url="$1"
+  if curl -fsS --max-time 2 "$health_url" >/dev/null 2>&1; then
+    return 0
+  fi
+  local label="${DEEPSEEK_SIDECAR_LAUNCHD_LABEL:-com.codex-deepseek-sidecar-proxy}"
+  local service="gui/$(id -u)/${label}"
+  /bin/launchctl kickstart -k "$service" >/dev/null 2>&1 || true
+  for _ in 1 2 3 4 5; do
+    if curl -fsS --max-time 2 "$health_url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "error: DeepSeek sidecar proxy is unavailable; inspect launchctl print $service and the proxy log" >&2
+  echo "  Set DEEPSEEK_SIDECAR_LAUNCHD_LABEL if your LaunchAgent uses another label." >&2
+  return 1
+}
+
+check_sidecar_ready() {
+  local ready_url="$1"
+  local expected_model="$2"
+  local ready_payload
+  ready_payload=$(curl -fsS --max-time 10 "$ready_url" 2>/dev/null || true)
+  if [[ -z "$ready_payload" ]]; then
+    echo "error: DeepSeek sidecar cannot authenticate/reach the official API at $ready_url" >&2
+    return 1
+  fi
+  if ! printf '%s' "$ready_payload" | python3 -c '
+import json
+import sys
+
+expected = sys.argv[1]
+payload = json.load(sys.stdin)
+if payload.get("status") != "ok" or expected not in payload.get("models", []):
+    raise SystemExit(1)
+' "$expected_model"
+  then
+    echo "error: DeepSeek sidecar readiness check did not confirm model '$expected_model'" >&2
+    return 1
+  fi
+}
+
+refresh_model_catalog() {
+  local catalog_builder="$SCRIPT_DIR/refresh-codex-model-catalog"
+  local catalog_path="${HOME}/.codex/models.ds-sidecar.json"
+  if [[ ! -x "$catalog_builder" ]]; then
+    echo "error: sidecar model catalog refresher is not executable: $catalog_builder" >&2
+    return 1
+  fi
+  "$catalog_builder" --output "$catalog_path" >/dev/null
+}
+
 # ── configure mode
 
 if [[ "$configure_only" -eq 1 ]]; then
@@ -212,10 +335,12 @@ if [[ "$configure_only" -eq 1 ]]; then
   CONFIG_TOML="${HOME}/.codex/config.toml"
   if command -v codex &>/dev/null; then
     CODEX_DOCTOR_BIN="$(command -v codex)"
+  elif [[ -x /Applications/ChatGPT.app/Contents/Resources/codex ]]; then
+    CODEX_DOCTOR_BIN="/Applications/ChatGPT.app/Contents/Resources/codex"
   elif [[ -x /Applications/Codex.app/Contents/Resources/codex ]]; then
     CODEX_DOCTOR_BIN="/Applications/Codex.app/Contents/Resources/codex"
   else
-    echo "error: codex not found in PATH or /Applications/Codex.app/Contents/Resources/codex" >&2
+    echo "error: codex not found in PATH, ChatGPT.app, or Codex.app" >&2
     exit 1
   fi
   if [[ -f "$CONFIG_TOML" ]]; then
@@ -234,38 +359,43 @@ if [[ "$configure_only" -eq 1 ]]; then
       exit 1
     fi
   fi
+  defaults=()
+  while IFS= read -r default; do
+    defaults+=("$default")
+  done < <(profile_defaults)
+  provider_name="${defaults[0]}"
   provider_exists=0
+  PROFILE_TOML="${HOME}/.codex/${profile}.config.toml"
   profile_exists=0
-  [[ -f "$CONFIG_TOML" ]] && grep -q "^\[profiles\.${profile}\]" "$CONFIG_TOML" 2>/dev/null && profile_exists=1
-  [[ -f "$CONFIG_TOML" ]] && grep -q "^\[model_providers\.${profile}\]" "$CONFIG_TOML" 2>/dev/null && provider_exists=1
+  [[ -f "$PROFILE_TOML" ]] && profile_exists=1
+  [[ -f "$CONFIG_TOML" ]] && grep -q "^\[model_providers\.${provider_name}\]" "$CONFIG_TOML" 2>/dev/null && provider_exists=1
 
   if [[ "$profile_exists" -eq 1 ]]; then
-    echo "Profile [profiles.${profile}] already exists."
+    echo "Profile config ${PROFILE_TOML} already exists."
   else
-    echo "Profile [profiles.${profile}] not found in config.toml."
-    mkdir -p "$(dirname "$CONFIG_TOML")"
+    echo "Profile config ${PROFILE_TOML} not found."
+    mkdir -p "$(dirname "$PROFILE_TOML")"
     {
-      echo ""
-      echo "[profiles.${profile}]"
-      echo "model_provider = \"${profile}\""
-      echo 'model = "deepseek-v4-pro"'
-      echo 'model_reasoning_effort = "high"'
+      echo "model_provider = \"${defaults[0]}\""
+      echo "model = \"${defaults[1]}\""
+      echo "model_reasoning_effort = \"${defaults[2]}\""
       echo 'model_context_window = 1048576'
       echo 'model_auto_compact_token_limit = 600000'
-    } >> "$CONFIG_TOML"
-    echo "Wrote [profiles.${profile}] to config.toml."
+      echo "model_catalog_json = \"${HOME}/.codex/models.ds-sidecar.json\""
+    } > "$PROFILE_TOML"
+    echo "Wrote ${PROFILE_TOML}."
   fi
 
   if [[ "$provider_exists" -eq 1 ]]; then
-    echo "Provider [model_providers.${profile}] already exists."
-    existing_base_url=$(config_section_value "model_providers.${profile}" "base_url" 2>/dev/null || true)
-    existing_provider_name=$(config_section_value "model_providers.${profile}" "name" 2>/dev/null || true)
+    echo "Provider [model_providers.${provider_name}] already exists."
+    existing_base_url=$(config_section_value "model_providers.${provider_name}" "base_url" 2>/dev/null || true)
+    existing_provider_name=$(config_section_value "model_providers.${provider_name}" "name" 2>/dev/null || true)
     if [[ -n "$existing_provider_name" ]]; then
       echo "Existing provider name: $existing_provider_name"
     fi
     if [[ -n "$existing_base_url" ]]; then
       echo "Existing provider base_url: $existing_base_url"
-      if [[ "$existing_base_url" == "http://127.0.0.1:12359/v1" ]]; then
+      if [[ "$existing_base_url" == "http://127.0.0.1:12359/v1" || "$existing_base_url" == "http://127.0.0.1:12359/beta/v1" ]]; then
         echo "Existing provider already points at the built-in local proxy."
       else
         echo "Leaving the existing provider unchanged."
@@ -278,7 +408,7 @@ if [[ "$configure_only" -eq 1 ]]; then
     mkdir -p "$(dirname "$CONFIG_TOML")"
     {
       echo ""
-      echo "[model_providers.${profile}]"
+      echo "[model_providers.${provider_name}]"
       echo 'name = "DeepSeek via codex-deepseek-sidecar"'
       echo 'base_url = "http://127.0.0.1:12359/v1"'
       echo 'wire_api = "responses"'
@@ -287,53 +417,20 @@ if [[ "$configure_only" -eq 1 ]]; then
     echo "Wrote [model_providers.${profile}] to config.toml."
     echo ""
   fi
-  echo "If using the built-in local proxy, ensure it is running before sidecar tasks:"
-  echo "  DEEPSEEK_API_KEY=... \"$SCRIPT_DIR/deepseek-responses-proxy\""
-  echo ""
-  echo "For reusable startup, store the key only if the user approves local disk storage:"
-  echo "  umask 077"
-  echo "  printf '%s\\n' '<DeepSeek API key>' > \"${HOME}/.codex/deepseek-sidecar.key\""
-  echo "  \"$SCRIPT_DIR/deepseek-responses-proxy\" --api-key-file \"${HOME}/.codex/deepseek-sidecar.key\""
-  echo ""
-  echo "Checking Codex config..."
-  doctor_out=$("$CODEX_DOCTOR_BIN" doctor -c profile="$profile" --json --summary 2>&1) || true
-  result=$(printf '%s' "$doctor_out" | DOCTOR_REQUIRED_CHECKS="config.load,installation" parse_doctor 2>/dev/null) || result="parse_error"
-  case "$result" in
-    ok) echo "Config check passed." ;;
-    parse_error) echo "error: could not parse doctor output:" >&2; printf '%s\n' "$doctor_out" >&2; exit 1 ;;
-    *)
-      echo "Configuration check failed:" >&2
-      printf '%s\n' "$result" >&2
-      echo "" >&2
-      echo "Run this for the full redacted Codex report:" >&2
-      echo "  \"$CODEX_DOCTOR_BIN\" doctor -c profile=\"$profile\" --json --summary" >&2
-      echo "" >&2
-      echo "If [profiles.${profile}] or [model_providers.${profile}] already existed and is not this sidecar profile, create a separate profile instead:" >&2
-      echo "  $0 --profile ds-sidecar-local --configure" >&2
-      exit 1
-      ;;
-  esac
-
-  network_result=$(printf '%s' "$doctor_out" | DOCTOR_REQUIRED_CHECKS="network.provider_reachability" parse_doctor 2>/dev/null) || network_result="parse_error"
-  if [[ "$network_result" == "ok" ]]; then
-    echo "Connectivity check passed."
-  elif [[ "$network_result" == "parse_error" ]]; then
-    echo "warning: could not parse connectivity check output; config is still written." >&2
-  else
-    echo "Connectivity check warning:" >&2
-    printf '%s\n' "$network_result" >&2
-    echo "Configuration is present, but the provider is not reachable yet." >&2
-    echo "Start the relevant proxy/provider, then run:" >&2
-    echo "  \"$CODEX_DOCTOR_BIN\" doctor -c profile=\"$profile\" --json --summary" >&2
-  fi
+  refresh_model_catalog
+  echo "Checking sidecar profile and official API readiness..."
+  validate_sidecar_profile
+  ensure_local_proxy_running "${provider_base_url%/}/health"
+  check_sidecar_ready "${provider_base_url%/}/ready" "$profile_model"
+  echo "Sidecar profile and readiness check passed."
   exit 0
 fi
 
 # Codex's extension-host tool bridge expects UTF-8 environment strings. Build
 # its environment from safe literals so unrelated desktop variables containing
 # malformed bytes cannot panic tool execution.
-safe_user="${USER}"
-safe_home="${HOME}"
+safe_user="${USER:-$(/usr/bin/id -un)}"
+safe_home="${HOME:-/Users/$safe_user}"
 
 clean_env=(
   /usr/bin/env -i
@@ -367,12 +464,21 @@ if [[ ${#pass_env[@]} -gt 0 ]]; then
   done
 fi
 
-SESSION_FILE="/tmp/deepseek-sidecar-sessions.txt"
-LOCK_ROOT="/tmp/deepseek-sidecar-locks"
+STATE_ROOT="${XDG_STATE_HOME:-${HOME}/.codex/state}/deepseek-sidecar"
+SESSION_FILE="$STATE_ROOT/sessions.txt"
+LOCK_ROOT="$STATE_ROOT/locks"
+LEGACY_SESSION_FILE="/tmp/deepseek-sidecar-sessions.txt"
+umask 077
 mkdir -p "$LOCK_ROOT"
+chmod 700 "$STATE_ROOT" "$LOCK_ROOT"
+if [[ ! -f "$SESSION_FILE" && -f "$LEGACY_SESSION_FILE" ]]; then
+  cp "$LEGACY_SESSION_FILE" "$SESSION_FILE"
+fi
+touch "$SESSION_FILE"
+chmod 600 "$SESSION_FILE"
 
 extract_session_id() {
-  sed 's/.* session_id=//'
+  sed -E 's/.* session_id=([^ ]+).*/\1/'
 }
 
 extract_workdir() {
@@ -389,16 +495,38 @@ extract_task_id() {
   local line="$1"
   if [[ "$line" == *" task_id="* ]]; then
     line="${line#* task_id=}"
+    line="${line%% profile=*}"
     printf '%s' "${line%% session_id=*}"
   else
     printf '%s' "-"
   fi
 }
 
+extract_profile() {
+  local line="$1"
+  if [[ "$line" == *" profile="* ]]; then
+    line="${line#* profile=}"
+    line="${line%% effort=*}"
+    printf '%s' "${line%% session_id=*}"
+  else
+    printf '%s' ""
+  fi
+}
+
+extract_effort() {
+  local line="$1"
+  if [[ "$line" == *" effort="* ]]; then
+    line="${line#* effort=}"
+    printf '%s' "${line%% session_id=*}"
+  else
+    printf '%s' ""
+  fi
+}
+
 latest_session_line() {
   [[ -f "$SESSION_FILE" ]] || return 0
   if [[ -n "$task_id" ]]; then
-    grep -F "workdir=${workdir} task_id=${task_id} session_id=" "$SESSION_FILE" 2>/dev/null | tail -1 || true
+    grep -F "workdir=${workdir} task_id=${task_id} " "$SESSION_FILE" 2>/dev/null | tail -1 || true
   else
     grep -F "workdir=${workdir} " "$SESSION_FILE" 2>/dev/null | tail -1 || true
   fi
@@ -420,6 +548,8 @@ if [[ "$list_only" -eq 1 ]]; then
       [[ -n "$line" ]] || continue
       listed_workdir=$(extract_workdir "$line")
       listed_task_id=$(extract_task_id "$line")
+      listed_profile=$(extract_profile "$line")
+      listed_effort=$(extract_effort "$line")
       listed_session_id=$(printf '%s' "$line" | extract_session_id)
       [[ "$listed_workdir" == "$workdir" ]] || continue
       [[ -z "$task_id" || "$listed_task_id" == "$task_id" ]] || continue
@@ -428,7 +558,7 @@ if [[ "$list_only" -eq 1 ]]; then
       else
         listed_status="idle"
       fi
-      echo "status=$listed_status task_id=$listed_task_id session_id=$listed_session_id workdir=$listed_workdir"
+      echo "status=$listed_status task_id=$listed_task_id profile=${listed_profile:-unknown} effort=${listed_effort:-profile-default} session_id=$listed_session_id workdir=$listed_workdir"
       found=1
     done < "$SESSION_FILE"
   fi
@@ -477,12 +607,25 @@ fi
 
 session_workdir=""
 session_task_id="-"
+session_profile=""
+session_effort=""
 if [[ -n "$session_id" && -f "$SESSION_FILE" ]]; then
   session_line=$(grep -F "session_id=${session_id}" "$SESSION_FILE" 2>/dev/null | tail -1 || true)
   if [[ -n "$session_line" ]]; then
     session_workdir=$(extract_workdir "$session_line")
     session_task_id=$(extract_task_id "$session_line")
+    session_profile=$(extract_profile "$session_line")
+    session_effort=$(extract_effort "$session_line")
   fi
+fi
+if [[ -n "$session_id" && "$profile_explicit" -eq 0 && -n "$session_profile" ]]; then
+  profile="$session_profile"
+fi
+if [[ -n "$session_id" && "$effort_explicit" -eq 0 && -n "$session_effort" ]]; then
+  # Older mappings used the display-only string "profile-default". Let the
+  # current profile supply its real setting instead of passing that string to
+  # Codex as an invalid override.
+  [[ "$session_effort" == "profile-default" ]] || effort="$session_effort"
 fi
 
 lock_dir=""
@@ -511,13 +654,13 @@ if [[ "$status_only" -eq 1 ]]; then
       echo "status=missing workdir=$workdir next=new-session"
     fi
   elif session_is_running; then
-    echo "status=running task_id=$session_task_id session_id=$session_id workdir=${session_workdir:-unknown} next=wait"
+    echo "status=running task_id=$session_task_id profile=${session_profile:-$profile} effort=${session_effort:-profile-default} session_id=$session_id workdir=${session_workdir:-unknown} next=wait"
   elif [[ -z "$session_workdir" ]]; then
     remove_stale_lock
     echo "status=untracked task_id=$session_task_id session_id=$session_id workdir=unknown next=resume-with---cd-or-new-session"
   else
     remove_stale_lock
-    echo "status=idle task_id=$session_task_id session_id=$session_id workdir=$session_workdir next=resume"
+    echo "status=idle task_id=$session_task_id profile=${session_profile:-$profile} effort=${session_effort:-profile-default} session_id=$session_id workdir=$session_workdir next=resume"
   fi
   exit 0
 fi
@@ -528,8 +671,14 @@ if [[ -n "${CODEX_SUBAGENT_CODEX_BIN:-}" ]]; then
   CODEX_BIN="$CODEX_SUBAGENT_CODEX_BIN"
 elif command -v codex &>/dev/null; then
   CODEX_BIN="$(command -v codex)"
+elif [[ -x /Applications/ChatGPT.app/Contents/Resources/codex ]]; then
+  # Terminal launched by AppleScript is a login shell with a minimal PATH.
+  # ChatGPT.app is the installed desktop host on current macOS builds.
+  CODEX_BIN="/Applications/ChatGPT.app/Contents/Resources/codex"
 elif [[ -x /Applications/Codex.app/Contents/Resources/codex ]]; then
   CODEX_BIN="/Applications/Codex.app/Contents/Resources/codex"
+elif [[ -x "${HOME}/.local/bin/codex" ]]; then
+  CODEX_BIN="${HOME}/.local/bin/codex"
 else
   echo "error: could not find codex binary" >&2
   exit 1
@@ -539,24 +688,17 @@ if [[ ! -x "$CODEX_BIN" ]]; then
   exit 1
 fi
 
-# ── pre-flight connectivity check
+# ── profile and service pre-flight
 
-if [[ "$doctor_check" -eq 1 && -z "$session_id" ]]; then
-  doctor_out=$("$CODEX_BIN" doctor -c profile="$profile" --json --summary 2>&1) || true
-  result=$(printf '%s' "$doctor_out" | parse_doctor 2>/dev/null) || result="parse_error"
-  if [[ "$result" != "ok" ]]; then
-    echo "error: connectivity check failed for profile '${profile}'" >&2
-    if [[ "$result" == "parse_error" ]]; then
-      printf '%s\n' "$doctor_out" >&2
-    else
-      printf '%s\n' "$result" >&2
-    fi
-    echo "  Use --no-doctor-check to skip, or --configure to set up the profile." >&2
-    exit 1
-  fi
+validate_sidecar_profile
+if [[ "$doctor_check" -eq 1 ]]; then
+  ensure_local_proxy_running "${provider_base_url%/}/health"
+  check_sidecar_ready "${provider_base_url%/}/ready" "$profile_model"
 fi
 
 run_workdir="$workdir"
+effective_effort="${effort:-$profile_effort}"
+effort_override=(-c "model_reasoning_effort=\"$effective_effort\"")
 if [[ -n "$session_id" ]]; then
   if [[ -n "$session_workdir" ]]; then
     run_workdir="$session_workdir"
@@ -577,10 +719,13 @@ if [[ -n "$session_id" ]]; then
   echo "$$" > "$lock_dir/pid"
   cmd=(
     "$CODEX_BIN"
-    exec resume
+    exec
+    --profile "$profile"
     --skip-git-repo-check
-    -c profile="$profile"
-    -c sandbox=danger-full-access
+    --sandbox danger-full-access
+    -c mcp_servers.vibearound.enabled=false
+    "${effort_override[@]}"
+    resume
     "$session_id"
   )
 else
@@ -590,6 +735,8 @@ else
     --profile "$profile"
     --skip-git-repo-check
     --sandbox danger-full-access
+    -c mcp_servers.vibearound.enabled=false
+    "${effort_override[@]}"
     -C "$workdir"
   )
 fi
@@ -634,16 +781,21 @@ if [[ "$monitor_enabled" -eq 1 ]]; then
   monitor_session="$monitor_log.session"
   terminal_chat="${SCRIPT_DIR}/terminal-chat"
   wrapper_entry="${SCRIPT_DIR}/codex-deepseek-sidecar"
-  if ! /usr/bin/osascript - "$monitor_log" "$monitor_done" "$monitor_session" "$terminal_chat" "$wrapper_entry" <<'OSA' >/dev/null 2>&1
+  monitor_effort="$effective_effort"
+  if ! /usr/bin/osascript - "$monitor_log" "$monitor_done" "$monitor_session" "$terminal_chat" "$wrapper_entry" "$profile" "$profile_model" "$monitor_effort" "$run_workdir" <<'OSA' >/dev/null 2>&1
 on run argv
   set logFile to item 1 of argv
   set doneFile to item 2 of argv
   set sessionFile to item 3 of argv
   set chatScript to item 4 of argv
   set wrapperEntry to item 5 of argv
+  set profileName to item 6 of argv
+  set modelName to item 7 of argv
+  set reasoningEffort to item 8 of argv
+  set workingDirectory to item 9 of argv
   tell application "Terminal"
     activate
-    do script quoted form of chatScript & " " & quoted form of logFile & " " & quoted form of doneFile & " " & quoted form of sessionFile & " " & quoted form of wrapperEntry
+    do script quoted form of chatScript & " " & quoted form of logFile & " " & quoted form of doneFile & " " & quoted form of sessionFile & " " & quoted form of wrapperEntry & " " & quoted form of profileName & " " & quoted form of modelName & " " & quoted form of reasoningEffort & " " & quoted form of workingDirectory
   end tell
 end run
 OSA
@@ -699,9 +851,9 @@ if [[ -z "$session_id" ]]; then
   new_sid=$(sed -n 's/.*session id: \([0-9a-f-]*\).*/\1/p' "$tmp_stderr" | head -1)
   if [[ -n "$new_sid" ]]; then
     if [[ -n "$task_id" ]]; then
-      echo "workdir=${workdir} task_id=${task_id} session_id=${new_sid}" >> "$SESSION_FILE"
+      echo "workdir=${workdir} task_id=${task_id} profile=${profile} effort=${effective_effort} session_id=${new_sid}" >> "$SESSION_FILE"
     else
-      echo "workdir=${workdir} session_id=${new_sid}" >> "$SESSION_FILE"
+      echo "workdir=${workdir} profile=${profile} effort=${effective_effort} session_id=${new_sid}" >> "$SESSION_FILE"
     fi
     if [[ -n "$monitor_session" ]]; then
       printf '%s\n' "$new_sid" > "$monitor_session"

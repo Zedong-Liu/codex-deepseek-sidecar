@@ -5,10 +5,48 @@ log_file="$1"
 done_file="$2"
 session_file="$3"
 wrapper="$4"
+profile="${5:-ds-sidecar-local}"
+model="${6:-DeepSeek}"
+effort="${7:-profile default}"
+workdir="${8:-$PWD}"
 
-printf '\nDeepSeek subagent session output: %s\n\n' "$log_file"
+if [[ "${TERM:-}" != "dumb" && -t 1 ]]; then
+  reset=$'\033[0m'
+  dim=$'\033[2m'
+  blue=$'\033[38;5;75m'
+  cyan=$'\033[38;5;81m'
+  green=$'\033[38;5;78m'
+  yellow=$'\033[38;5;221m'
+else
+  reset=""
+  dim=""
+  blue=""
+  cyan=""
+  green=""
+  yellow=""
+fi
+
+print_header() {
+  printf '\033]0;DeepSeek Sidecar — %s\007' "$model"
+  printf '\n%s╭──────────────────────────── DeepSeek Sidecar ────────────────────────────╮%s\n' "$blue" "$reset"
+  printf '%s│%s  %s● LIVE · VERIFIED ROUTE%s\n' "$blue" "$reset" "$cyan" "$reset"
+  printf '%s│%s  %smodel%s    %s%s%s\n' "$blue" "$reset" "$dim" "$reset" "$green" "$model" "$reset"
+  printf '%s│%s  %seffort%s   %s%s%s  %s(actual effective setting)%s\n' "$blue" "$reset" "$dim" "$reset" "$yellow" "$effort" "$reset" "$dim" "$reset"
+  printf '%s│%s  %sprofile%s  %s%s%s\n' "$blue" "$reset" "$dim" "$reset" "$profile" "$reset"
+  printf '%s│%s  %sproject%s  %s%s%s\n' "$blue" "$reset" "$dim" "$reset" "$workdir" "$reset"
+  printf '%s│%s  %sStreaming task output below. This window stays interactive when it completes.%s\n' "$blue" "$reset" "$dim" "$reset"
+  printf '%s╰─────────────────────────────────────────────────────────────────────────╯%s\n\n' "$blue" "$reset"
+}
+
+print_ready() {
+  printf '\n%s───────────────────────────────────────────────────────────────────────────%s\n' "$blue" "$reset"
+  printf '%s✓ Task complete%s  %sSession %s is ready for follow-ups.%s\n' "$green" "$reset" "$dim" "$session_id" "$reset"
+  printf '%sType a message and press Return; /exit keeps the session available for later resume.%s\n\n' "$dim" "$reset"
+}
+
+print_header
 touch "$log_file"
-tail -f "$log_file" &
+tail -n 0 -f "$log_file" &
 tail_pid=$!
 
 stop_tail() {
@@ -32,19 +70,20 @@ if [[ -f "$session_file" ]]; then
 fi
 
 if [[ -z "$session_id" ]]; then
-  printf '\nInitial call finished without a reusable session ID. Start a new delegated call from Codex.\n'
+  printf '\n%s! Task finished without a reusable session ID.%s Start a new delegated call from Codex.\n' "$yellow" "$reset"
   exit 0
 fi
 
-printf '\nInitial call finished. Continue DeepSeek session %s here.\n' "$session_id"
-printf 'Enter one follow-up message per line. Type /exit or /quit to close this chat.\n\n'
+print_ready
 
 while true; do
-  printf 'deepseek> '
-  IFS= read -r message || break
+  # Readline makes backspace, cursor movement, and IME composition reliable in
+  # Terminal; keep the prompt itself ASCII so its display width is unambiguous.
+  printf '%sdeepseek%s > ' "$cyan" "$reset"
+  IFS= read -e -r message || break
   case "$message" in
     /exit|/quit)
-      printf 'Session left idle for later resume: %s\n' "$session_id"
+      printf '%sSession left idle for later resume:%s %s\n' "$dim" "$reset" "$session_id"
       break
       ;;
     "")
@@ -52,12 +91,15 @@ while true; do
       ;;
   esac
 
+  printf '%s↳ Sending follow-up…%s\n' "$dim" "$reset"
   set +e
   "$wrapper" --no-monitor --no-doctor-check --session-id "$session_id" -- "$message" 2>&1 | tee -a "$log_file"
   status=${PIPESTATUS[0]}
   set -e
   if [[ "$status" -ne 0 ]]; then
-    printf 'Follow-up exited with status %s. The session remains available for inspection or retry.\n' "$status"
+    printf '%s! Follow-up exited with status %s.%s The session remains available for retry.\n' "$yellow" "$status" "$reset"
+  else
+    printf '%s✓ Follow-up complete.%s\n' "$green" "$reset"
   fi
   printf '\n'
 done

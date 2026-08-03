@@ -86,9 +86,36 @@ These operational details belong in [SKILL.md](SKILL.md), not in front of human 
 
 ## 🔌 Built-in proxy
 
-The bundled `deepseek-responses-proxy` is intentionally minimal: Python stdlib only, localhost by default, designed for Codex's large request bodies. It bridges function tools and ignores Responses built-in tools that DeepSeek Chat does not support, returning a clear error if one is explicitly required. For reusable startup, it can read the key from a private file with `--api-key-file`.
+The bundled `deepseek-responses-proxy` is intentionally minimal: Python stdlib only, localhost by default, designed for Codex's large request bodies. It bridges function tools and ignores Responses built-in tools that DeepSeek Chat does not support, returning a clear error if one is explicitly required. It connects only to the official `https://api.deepseek.com` API. Supply credentials from an environment variable or private key file; never commit a key or put one in a profile or prompt.
 
-If you already use VibeAround or another compatible provider, Codex can keep using that instead.
+## 🛠️ Stable operation and sessions
+
+First provide `DEEPSEEK_API_KEY` through your secret manager or user LaunchAgent
+and start the local proxy. Then configure and verify the profiles:
+
+```bash
+scripts/codex-deepseek-subagent --configure
+curl -fsS http://127.0.0.1:12359/v1/ready
+```
+
+The default profile is DeepSeek V4 Pro on the stable API. Choose Flash for
+bounded low-cost work; `--effort high|max` selects the official thinking effort,
+and persisted sessions remember their selected profile and effort:
+
+```bash
+# Clear, bounded, read-only investigation
+scripts/codex-deepseek-subagent --profile ds-sidecar-flash --effort high --cd "$PWD" "<task>"
+
+# Bounded but branching diagnosis or a small repair
+scripts/codex-deepseek-subagent --profile ds-sidecar-flash --effort max --cd "$PWD" "<task>"
+```
+
+Each execution opens a Terminal monitor with wrapper-verified model, effort,
+profile, live output, and a `deepseek >` follow-up prompt. Raw reasoning is not
+rendered to users; the proxy preserves it opaquely only when a tool-call
+continuation requires it. `/metrics` exposes aggregate cache hit/miss counts
+only—never prompts, tool arguments, or keys. Re-run `--configure` after a Codex
+upgrade to refresh local model metadata.
 
 ## 🧩 Framework adapters
 
@@ -109,6 +136,7 @@ Codex remains the main, stable entrypoint. Other framework adapters live in thei
 ├── scripts/codex-deepseek-sidecar
 ├── scripts/codex-deepseek-subagent
 ├── scripts/deepseek-responses-proxy
+├── scripts/refresh-codex-model-catalog
 └── scripts/terminal-chat
 ```
 
