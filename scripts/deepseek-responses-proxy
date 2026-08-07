@@ -24,7 +24,7 @@ DEFAULT_PORT = 12359
 DEFAULT_UPSTREAM = "https://api.deepseek.com"
 DEFAULT_MAX_BODY = 128 * 1024 * 1024
 DEFAULT_TIMEOUT = 900
-MODELS = ("deepseek-v4-pro", "deepseek-v4-flash")
+MODELS = ("deepseek-v4-flash", "deepseek-v4-pro")
 REASONING_ENVELOPE_PREFIX = "deepseek-reasoning-v1:"
 # DeepSeek V4 documentation shows `｜DSML｜`; the official Flash endpoint can
 # emit the tokenizer's doubled delimiter `｜｜DSML｜｜` instead.
@@ -1226,7 +1226,7 @@ def self_test() -> int:
     }
     chat = responses_to_chat(request, beta=True)
     assert chat["messages"][0]["role"] == "system"
-    assert "deepseek-v4-pro" in chat["messages"][0]["content"]
+    assert "deepseek-v4-flash" in chat["messages"][0]["content"]
     assert chat["messages"][1]["role"] == "user"
     assert chat["messages"][2]["role"] == "assistant"
     assert len(chat["messages"][2]["tool_calls"]) == 2

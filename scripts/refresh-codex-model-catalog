@@ -45,8 +45,26 @@ def deepseek_model(template: dict[str, Any], slug: str, display_name: str, descr
             "supports_image_detail_original": False,
             "supports_search_tool": False,
             "supported_in_api": True,
+            # Official DeepSeek Codex catalog metadata: native Responses API,
+            # HTTP transport only, and only the reasoning levels DeepSeek
+            # documents (low/high/max).
+            "default_reasoning_level": "high",
+            "supported_reasoning_levels": [
+                {"effort": "low", "description": "Fast responses with lighter reasoning"},
+                {"effort": "high", "description": "Extra high reasoning depth for complex problems"},
+                {"effort": "max", "description": "Maximum reasoning depth for the hardest problems"},
+            ],
+            "prefer_websockets": False,
+            "supports_reasoning_summaries": True,
+            "reasoning_summary_format": "experimental",
+            "use_responses_lite": False,
+            "minimal_client_version": "0.144.0",
+            "web_search_tool_type": "text",
         }
     )
+    model.pop("tool_mode", None)
+    model.pop("service_tiers", None)
+    model.pop("additional_speed_tiers", None)
     return model
 
 

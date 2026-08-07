@@ -11,6 +11,7 @@ Usage:
   codex-deepseek-sidecar [--profile NAME] [--effort high|max] [--cd DIR] [--task-id NAME] [--json] [--resume] [--session-id ID] [--pass-env NAME] [--no-monitor] [--verbose-stderr] [--no-doctor-check] PROMPT...
   codex-deepseek-sidecar [--profile NAME] [--effort high|max] [--cd DIR] [--task-id NAME] [--json] [--resume] [--session-id ID] [--pass-env NAME] [--no-monitor] [--verbose-stderr] [--no-doctor-check] -
   codex-deepseek-sidecar [--profile NAME] [--effort high|max] [--cd DIR] [--task-id NAME] [--session-id ID] --status
+  codex-deepseek-sidecar [--profile NAME] [--effort high|max] [--cd DIR] [--task-id NAME] [--session-id ID] [--wait-timeout SEC] --wait
   codex-deepseek-sidecar [--profile NAME] [--effort high|max] [--cd DIR] [--task-id NAME] --list
   codex-deepseek-sidecar [--profile NAME] --configure
 
@@ -21,6 +22,7 @@ With --resume, continues the most recent DeepSeek sidecar session in this workin
 With --session-id <UUID>, resumes a specific session.
 With --task-id NAME, records and looks up a named task within the working directory.
 Use --status before follow-ups to report whether a recorded session is running or idle.
+Use --wait to block until a recorded session leaves running (poll --status). Optional --wait-timeout SEC.
 Use --list to show recorded sessions for the working directory.
 Use --pass-env NAME repeatedly for task variables that the sidecar must inherit.
 Use --effort high|max to override the profile's DeepSeek reasoning effort.
@@ -36,9 +38,11 @@ resume=0
 json=0
 verbose_stderr=0
 status_only=0
+wait_only=0
+wait_timeout=0
 list_only=0
 monitor_enabled=1
-profile="ds-sidecar-local"
+profile="ds-sidecar-flash"
 profile_explicit=0
 effort=""
 effort_explicit=0
@@ -101,6 +105,15 @@ while [[ $# -gt 0 ]]; do
       status_only=1
       shift
       ;;
+    --wait)
+      wait_only=1
+      shift
+      ;;
+    --wait-timeout)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      wait_timeout="$2"
+      shift 2
+      ;;
     --list)
       list_only=1
       shift
@@ -125,11 +138,19 @@ if [[ "$status_only" -eq 1 && "$list_only" -eq 1 ]]; then
   echo "error: --status and --list cannot be used together" >&2
   exit 2
 fi
-if [[ ( "$status_only" -eq 1 || "$list_only" -eq 1 ) && ${#args[@]} -ne 0 ]]; then
-  echo "error: --status and --list do not accept a prompt" >&2
+if [[ "$wait_only" -eq 1 && ( "$status_only" -eq 1 || "$list_only" -eq 1 || "$configure_only" -eq 1 ) ]]; then
+  echo "error: --wait cannot be combined with --status, --list, or --configure" >&2
   exit 2
 fi
-if [[ "$status_only" -eq 0 && "$list_only" -eq 0 && "$configure_only" -eq 0 && ${#args[@]} -eq 0 ]]; then
+if [[ ! "$wait_timeout" =~ ^[0-9]+$ ]]; then
+  echo "error: --wait-timeout must be a non-negative integer (seconds)" >&2
+  exit 2
+fi
+if [[ ( "$status_only" -eq 1 || "$list_only" -eq 1 || "$wait_only" -eq 1 ) && ${#args[@]} -ne 0 ]]; then
+  echo "error: --status, --list, and --wait do not accept a prompt" >&2
+  exit 2
+fi
+if [[ "$status_only" -eq 0 && "$list_only" -eq 0 && "$wait_only" -eq 0 && "$configure_only" -eq 0 && ${#args[@]} -eq 0 ]]; then
   usage >&2
   exit 2
 fi
@@ -246,9 +267,9 @@ PY
 profile_defaults() {
   case "$profile" in
     ds-sidecar-local) printf '%s\n' "ds-sidecar-local" "deepseek-v4-pro" "high" ;;
-    ds-sidecar-flash) printf '%s\n' "ds-sidecar-local" "deepseek-v4-flash" "high" ;;
+    ds-sidecar-flash) printf '%s\n' "ds-sidecar-local" "deepseek-v4-flash" "max" ;;
     ds-sidecar-beta) printf '%s\n' "ds-sidecar-beta" "deepseek-v4-pro" "high" ;;
-    *) printf '%s\n' "$profile" "deepseek-v4-pro" "high" ;;
+    *) printf '%s\n' "$profile" "deepseek-v4-flash" "max" ;;
   esac
 }
 
@@ -267,12 +288,48 @@ validate_sidecar_profile() {
     echo "error: profile '$profile' must use DeepSeek reasoning effort high or max" >&2
     return 1
   fi
-  provider_base_url=$(config_section_value "model_providers.${profile_provider}" "base_url" 2>/dev/null || true)
-  provider_wire_api=$(config_section_value "model_providers.${profile_provider}" "wire_api" 2>/dev/null || true)
-  if [[ "$provider_base_url" != http://127.0.0.1:12359/* || "$provider_wire_api" != "responses" ]]; then
-    echo "error: profile '$profile' must use a local DeepSeek Responses provider on 127.0.0.1:12359" >&2
+  provider_base_url=$(provider_section_value "model_providers.${profile_provider}" "base_url" 2>/dev/null || true)
+  provider_wire_api=$(provider_section_value "model_providers.${profile_provider}" "wire_api" 2>/dev/null || true)
+  if [[ -z "$provider_base_url" || -z "$provider_wire_api" ]]; then
+    echo "error: provider [model_providers.${profile_provider}] must define base_url and wire_api in $PROFILE_TOML (or $CONFIG_TOML)" >&2
     return 1
   fi
+  SIDECAR_NATIVE=0
+  if [[ "$provider_base_url" == "https://api.deepseek.com/" || "$provider_base_url" == https://api.deepseek.com/* ]]; then
+    SIDECAR_NATIVE=1
+    if [[ "$provider_wire_api" != "responses" ]]; then
+      echo "error: native DeepSeek provider must use wire_api = \"responses\"" >&2
+      return 1
+    fi
+    auth_command=$(provider_section_value "model_providers.${profile_provider}.auth" "command" 2>/dev/null || true)
+    if [[ -z "$auth_command" ]]; then
+      echo "error: native provider must define [model_providers.${profile_provider}.auth] command (Keychain-backed token helper)" >&2
+      return 1
+    fi
+    if [[ ! -x "$auth_command" ]]; then
+      echo "error: native provider auth command is not executable: $auth_command" >&2
+      return 1
+    fi
+    provider_auth_command="$auth_command"
+  elif [[ "$provider_base_url" != http://127.0.0.1:12359/* || "$provider_wire_api" != "responses" ]]; then
+    echo "error: profile '$profile' must use either the official https://api.deepseek.com/ Responses provider or the local DeepSeek Responses proxy on 127.0.0.1:12359" >&2
+    return 1
+  fi
+}
+
+provider_section_value() {
+  local section="$1"
+  local key="$2"
+  local value
+  value=$( ( CONFIG_TOML="$PROFILE_TOML"; config_section_value "$section" "$key" ) 2>/dev/null ) && {
+    printf '%s' "$value"
+    return 0
+  }
+  value=$( ( CONFIG_TOML="$CONFIG_TOML"; config_section_value "$section" "$key" ) 2>/dev/null ) && {
+    printf '%s' "$value"
+    return 0
+  }
+  return 1
 }
 
 ensure_local_proxy_running() {
@@ -280,8 +337,23 @@ ensure_local_proxy_running() {
   if curl -fsS --max-time 2 "$health_url" >/dev/null 2>&1; then
     return 0
   fi
-  local label="${DEEPSEEK_SIDECAR_LAUNCHD_LABEL:-com.codex-deepseek-sidecar-proxy}"
+  local label="${DEEPSEEK_SIDECAR_LAUNCHD_LABEL:-}"
+  if [[ -z "$label" ]]; then
+    local candidate
+    candidate=$(ls "${HOME}/Library/LaunchAgents/"*deepseek*sidecar*proxy*.plist 2>/dev/null | head -1 || true)
+    if [[ -n "$candidate" ]]; then
+      label=$(/usr/libexec/PlistBuddy -c 'Print :Label' "$candidate" 2>/dev/null || true)
+    fi
+  fi
+  label="${label:-com.codex-deepseek-sidecar-proxy}"
   local service="gui/$(id -u)/${label}"
+  local plist="${HOME}/Library/LaunchAgents/${label}.plist"
+  if ! /bin/launchctl print "$service" >/dev/null 2>&1 && [[ -f "$plist" ]]; then
+    /bin/launchctl bootstrap "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
+    # Fallback for LaunchAgents marked disabled in launchd: legacy load -w
+    # clears the disabled flag, which bootstrap rejects with an I/O error.
+    /bin/launchctl load -w "$plist" >/dev/null 2>&1 || true
+  fi
   /bin/launchctl kickstart -k "$service" >/dev/null 2>&1 || true
   for _ in 1 2 3 4 5; do
     if curl -fsS --max-time 2 "$health_url" >/dev/null 2>&1; then
@@ -318,6 +390,27 @@ if payload.get("status") != "ok" or expected not in payload.get("models", []):
   fi
 }
 
+check_native_ready() {
+  local key
+  local status
+  key=$("${provider_auth_command:-$SCRIPT_DIR/codex-deepseek-keychain-token}" 2>/dev/null) || {
+    echo "error: cannot read the DeepSeek API key from the provider auth helper" >&2
+    return 1
+  }
+  if [[ -z "$key" || "$key" != sk-* ]]; then
+    echo "error: DeepSeek API key from the provider auth helper is missing or invalid" >&2
+    return 1
+  fi
+  status=$( { printf 'header = "Authorization: Bearer %s"\n' "$key"; } | curl -sS -o /dev/null -w '%{http_code}' --max-time 15 --config - https://api.deepseek.com/models ) || {
+    echo "error: cannot reach https://api.deepseek.com/models" >&2
+    return 1
+  }
+  if [[ "$status" != "200" ]]; then
+    echo "error: DeepSeek native API authentication failed (HTTP $status)" >&2
+    return 1
+  fi
+}
+
 refresh_model_catalog() {
   local catalog_builder="$SCRIPT_DIR/refresh-codex-model-catalog"
   local catalog_path="${HOME}/.codex/models.ds-sidecar.json"
@@ -333,6 +426,7 @@ refresh_model_catalog() {
 if [[ "$configure_only" -eq 1 ]]; then
   [[ ${#args[@]} -eq 0 ]] || { echo "error: --configure does not accept a prompt" >&2; exit 2; }
   CONFIG_TOML="${HOME}/.codex/config.toml"
+  PROFILE_TOML="${HOME}/.codex/${profile}.config.toml"
   if command -v codex &>/dev/null; then
     CODEX_DOCTOR_BIN="$(command -v codex)"
   elif [[ -x /Applications/ChatGPT.app/Contents/Resources/codex ]]; then
@@ -364,65 +458,74 @@ if [[ "$configure_only" -eq 1 ]]; then
     defaults+=("$default")
   done < <(profile_defaults)
   provider_name="${defaults[0]}"
-  provider_exists=0
-  PROFILE_TOML="${HOME}/.codex/${profile}.config.toml"
-  profile_exists=0
-  [[ -f "$PROFILE_TOML" ]] && profile_exists=1
-  [[ -f "$CONFIG_TOML" ]] && grep -q "^\[model_providers\.${provider_name}\]" "$CONFIG_TOML" 2>/dev/null && provider_exists=1
+  profile_model="${defaults[1]}"
+  profile_effort="${defaults[2]}"
+  catalog_path="${HOME}/.codex/models.ds-sidecar.json"
+  auth_helper="$SCRIPT_DIR/codex-deepseek-keychain-token"
 
-  if [[ "$profile_exists" -eq 1 ]]; then
-    echo "Profile config ${PROFILE_TOML} already exists."
-  else
-    echo "Profile config ${PROFILE_TOML} not found."
-    mkdir -p "$(dirname "$PROFILE_TOML")"
-    {
-      echo "model_provider = \"${defaults[0]}\""
-      echo "model = \"${defaults[1]}\""
-      echo "model_reasoning_effort = \"${defaults[2]}\""
-      echo 'model_context_window = 1048576'
-      echo 'model_auto_compact_token_limit = 600000'
-      echo "model_catalog_json = \"${HOME}/.codex/models.ds-sidecar.json\""
-    } > "$PROFILE_TOML"
-    echo "Wrote ${PROFILE_TOML}."
-  fi
+  case "$profile" in
+    ds-sidecar-flash)
+      sidecar_provider="deepseek-native"
+      sidecar_route="native"
+      ;;
+    ds-sidecar-local)
+      sidecar_provider="ds-sidecar-local"
+      sidecar_route="proxy"
+      ;;
+    ds-sidecar-beta)
+      sidecar_provider="ds-sidecar-beta"
+      sidecar_route="proxy-beta"
+      ;;
+    *)
+      sidecar_provider="$profile"
+      sidecar_route="proxy"
+      ;;
+  esac
 
-  if [[ "$provider_exists" -eq 1 ]]; then
-    echo "Provider [model_providers.${provider_name}] already exists."
-    existing_base_url=$(config_section_value "model_providers.${provider_name}" "base_url" 2>/dev/null || true)
-    existing_provider_name=$(config_section_value "model_providers.${provider_name}" "name" 2>/dev/null || true)
-    if [[ -n "$existing_provider_name" ]]; then
-      echo "Existing provider name: $existing_provider_name"
-    fi
-    if [[ -n "$existing_base_url" ]]; then
-      echo "Existing provider base_url: $existing_base_url"
-      if [[ "$existing_base_url" == "http://127.0.0.1:12359/v1" || "$existing_base_url" == "http://127.0.0.1:12359/beta/v1" ]]; then
-        echo "Existing provider already points at the built-in local proxy."
-      else
-        echo "Leaving the existing provider unchanged."
-        echo "If this is a VibeAround or other provider profile, start that provider before using this sidecar."
-        echo "To create a separate built-in-proxy profile, run:"
-        echo "  $0 --profile ds-sidecar-local --configure"
-      fi
-    fi
-  else
-    mkdir -p "$(dirname "$CONFIG_TOML")"
-    {
-      echo ""
-      echo "[model_providers.${provider_name}]"
-      echo 'name = "DeepSeek via codex-deepseek-sidecar"'
-      echo 'base_url = "http://127.0.0.1:12359/v1"'
+  mkdir -p "$(dirname "$PROFILE_TOML")"
+  {
+    echo "model_provider = \"${sidecar_provider}\""
+    echo "model = \"${profile_model}\""
+    echo "model_reasoning_effort = \"${profile_effort}\""
+    echo "model_catalog_json = \"${catalog_path}\""
+    echo ""
+    echo "[model_providers.${sidecar_provider}]"
+    if [[ "$sidecar_route" == "native" ]]; then
+      echo 'name = "DeepSeek Official (native Responses API)"'
+      echo 'base_url = "https://api.deepseek.com/"'
       echo 'wire_api = "responses"'
       echo 'supports_websockets = false'
-    } >> "$CONFIG_TOML"
-    echo "Wrote [model_providers.${profile}] to config.toml."
-    echo ""
-  fi
+      echo ""
+      echo "[model_providers.${sidecar_provider}.auth]"
+      echo "command = \"${auth_helper}\""
+      echo 'timeout_ms = 5000'
+      echo 'refresh_interval_ms = 0'
+    else
+      if [[ "$sidecar_route" == "proxy-beta" ]]; then
+        echo 'name = "DeepSeek via local beta proxy"'
+        echo 'base_url = "http://127.0.0.1:12359/beta/v1"'
+      else
+        echo 'name = "DeepSeek via local sidecar proxy"'
+        echo 'base_url = "http://127.0.0.1:12359/v1"'
+      fi
+      echo 'wire_api = "responses"'
+      echo 'supports_websockets = false'
+    fi
+  } > "$PROFILE_TOML"
+  chmod 600 "$PROFILE_TOML"
+  echo "Wrote ${PROFILE_TOML} (route=${sidecar_route})."
   refresh_model_catalog
   echo "Checking sidecar profile and official API readiness..."
   validate_sidecar_profile
-  ensure_local_proxy_running "${provider_base_url%/}/health"
-  check_sidecar_ready "${provider_base_url%/}/ready" "$profile_model"
-  echo "Sidecar profile and readiness check passed."
+  if [[ "$doctor_check" -eq 1 ]]; then
+    if [[ "$SIDECAR_NATIVE" -eq 1 ]]; then
+      check_native_ready
+    else
+      ensure_local_proxy_running "${provider_base_url%/}/health"
+      check_sidecar_ready "${provider_base_url%/}/ready" "$profile_model"
+    fi
+  fi
+  echo "Sidecar profile and readiness check passed (${sidecar_route})."
   exit 0
 fi
 
@@ -646,7 +749,7 @@ remove_stale_lock() {
   rmdir "$lock_dir" 2>/dev/null || true
 }
 
-if [[ "$status_only" -eq 1 ]]; then
+emit_status_line() {
   if [[ -z "$session_id" ]]; then
     if [[ -n "$task_id" ]]; then
       echo "status=missing task_id=$task_id workdir=$workdir next=new-session"
@@ -661,6 +764,34 @@ if [[ "$status_only" -eq 1 ]]; then
   else
     remove_stale_lock
     echo "status=idle task_id=$session_task_id profile=${session_profile:-$profile} effort=${session_effort:-profile-default} session_id=$session_id workdir=$session_workdir next=resume"
+  fi
+}
+
+if [[ "$status_only" -eq 1 ]]; then
+  emit_status_line
+  exit 0
+fi
+
+if [[ "$wait_only" -eq 1 ]]; then
+  if [[ -z "$session_id" ]]; then
+    emit_status_line
+    exit 2
+  fi
+  started_at=$(date +%s)
+  while session_is_running; do
+    if [[ "$wait_timeout" -gt 0 ]]; then
+      now=$(date +%s)
+      if (( now - started_at >= wait_timeout )); then
+        echo "status=running task_id=$session_task_id profile=${session_profile:-$profile} effort=${session_effort:-profile-default} session_id=$session_id workdir=${session_workdir:-unknown} next=wait waited_sec=$((now - started_at)) result=timeout"
+        exit 4
+      fi
+    fi
+    sleep 5
+  done
+  emit_status_line
+  # Refresh lock cleanup after leaving running.
+  if [[ -z "$session_workdir" ]]; then
+    exit 2
   fi
   exit 0
 fi
@@ -692,8 +823,12 @@ fi
 
 validate_sidecar_profile
 if [[ "$doctor_check" -eq 1 ]]; then
-  ensure_local_proxy_running "${provider_base_url%/}/health"
-  check_sidecar_ready "${provider_base_url%/}/ready" "$profile_model"
+  if [[ "$SIDECAR_NATIVE" -eq 1 ]]; then
+    check_native_ready
+  else
+    ensure_local_proxy_running "${provider_base_url%/}/health"
+    check_sidecar_ready "${provider_base_url%/}/ready" "$profile_model"
+  fi
 fi
 
 run_workdir="$workdir"

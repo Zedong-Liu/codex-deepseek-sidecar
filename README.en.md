@@ -8,7 +8,7 @@ Delegate code reviews, debugging, research, and other bounded tasks without inte
 
 When the task finishes, the Terminal becomes an interactive `deepseek>` prompt for follow-ups. You can close it, check status by task ID, and resume the same session later.
 
-**No third-party proxy required. Bring your own DeepSeek key; the included local proxy handles Codex Responses traffic. 🚀**
+**No third-party proxy required. Flash talks directly to DeepSeek's official native Responses API; only Pro/Beta still use the included local proxy. 🚀**
 
 
 <p align="center">
@@ -24,8 +24,7 @@ This skill is meant to be read and executed by Codex, not memorized by humans. O
 ```text
 Install and configure https://github.com/Zedong-Liu/codex-deepseek-sidecar.
 I have a DeepSeek API key — ask me for it if it's not configured on this machine yet.
-If a local proxy or profile needs to be set up, handle that too.
-If using the included local proxy, start it and keep it running for sidecar tasks.
+Flash uses the official native Responses API by default. If a Pro/Beta profile needs the local proxy, start it and keep it running for those sidecar tasks.
 Then launch a DeepSeek sidecar for this repo to handle long or log-heavy tasks.
 ```
 
@@ -47,7 +46,7 @@ Auto-dispatch for tests, log analysis, and broad exploration, then synthesize re
 ## ✨ Why use it
 
 - 💸 **Dramatically lower worker token cost** — shift repeated file reads, log inspection, test runs, and broad exploration from expensive GPT tokens to DeepSeek worker tokens. Many workflows target an **80–90% lower token cost**.
-- **No third-party proxy needed** — a small built-in Python proxy bridges Codex Responses API to DeepSeek Chat Completions. When using the built-in profile, keep the local proxy process running.
+- **No third-party proxy needed** — the Flash profile connects directly to DeepSeek's official native Responses API (`wire_api = "responses"`), with the credential supplied through Codex's official Keychain-backed `auth.command`; only Pro/Beta still use the small built-in Python proxy bridge.
 - **GPT stays the brain** — the expensive model handles planning, judgment, and synthesis; DeepSeek handles bounded worker tasks.
 - **Still Codex harness** — sidecars retain Codex file access, command execution, sessions, and evidence reporting.
 
@@ -76,7 +75,7 @@ In real use, GPT still spends tokens on coordination and review. That is the poi
 When you ask Codex to use this skill, it can:
 
 - Install the repo as a Codex skill.
-- Start the built-in lightweight proxy if no local DeepSeek provider is available.
+- Connect Flash directly to the official native Responses API; start the built-in lightweight proxy only when Pro/Beta needs it.
 - Configure a Codex profile once so future tasks skip cold-start setup.
 - Launch DeepSeek sidecars for bounded tasks.
 - Track task IDs and sessions so follow-ups resume to the correct worker.
@@ -84,30 +83,57 @@ When you ask Codex to use this skill, it can:
 
 These operational details belong in [SKILL.md](SKILL.md), not in front of human readers.
 
-## 🔌 Built-in proxy
+## 🔌 Transport: official native API + built-in proxy (Pro/Beta fallback)
+
+The Flash profile now uses DeepSeek's officially recommended Codex integration:
+Codex talks directly to `https://api.deepseek.com/` via the Responses API with no
+translation layer. The API key is never written to `config.toml`; Codex's
+`[model_providers.<id>.auth]` command fetches it from the macOS Keychain item
+`codex-deepseek-official`. DeepSeek's docs currently enable Codex integration
+only for `deepseek-v4-flash` (Pro is expected in early August 2026), so
+`ds-sidecar-local` (Pro) and `ds-sidecar-beta` keep using the built-in proxy
+until then.
 
 The bundled `deepseek-responses-proxy` is intentionally minimal: Python stdlib only, localhost by default, designed for Codex's large request bodies. It bridges function tools; when V4 Flash emits a tool call as DSML text rather than an API `tool_calls` field, it restores the call to a structured function call before Codex sees it (including for streaming output), so a tool request cannot be mistaken for a final answer. It ignores Responses built-in tools that DeepSeek Chat does not support, returning a clear error if one is explicitly required. It connects only to the official `https://api.deepseek.com` API. Supply credentials from an environment variable or private key file; never commit a key or put one in a profile or prompt.
 
 ## 🛠️ Stable operation and sessions
 
-First provide `DEEPSEEK_API_KEY` through your secret manager or user LaunchAgent
-and start the local proxy. Then configure and verify the profiles:
+First store the DeepSeek API key in the macOS Keychain item
+`codex-deepseek-official` for the current user (or use `DEEPSEEK_API_KEY` /
+`DEEPSEEK_API_KEY_FILE` elsewhere), then configure and verify:
 
 ```bash
 scripts/codex-deepseek-subagent --configure
+```
+
+`--configure` only writes sidecar profile files under `~/.codex/` and never
+touches the top-level `model` / `model_provider` / auth keys of
+`~/.codex/config.toml`, so your ChatGPT/Codex login state stays intact. Do
+**not** run DeepSeek's official one-click script
+(`bash <(curl -fsSL https://cdn.deepseek.com/api-docs/codex-deepseek-setup.sh)`)
+against your real config: it rewrites the global config and hides the ChatGPT
+login session group. This skill implements the same official provider settings
+inside sidecar profiles instead. Pro/Beta still need the local proxy (launchd
+service `com.captainliu.deepseek-sidecar-proxy`):
+
+```bash
 curl -fsS http://127.0.0.1:12359/v1/ready
 ```
 
-The default profile is DeepSeek V4 Pro on the stable API. Choose Flash for
-bounded low-cost work; `--effort high|max` selects the official thinking effort,
-and persisted sessions remember their selected profile and effort:
+The default profile is DeepSeek V4 Flash on the stable API with thinking effort
+`max`. Use `--profile ds-sidecar-local` (Pro) for a stronger worker;
+`--effort high|max` overrides thinking effort, and persisted sessions remember
+their selected profile and effort:
 
 ```bash
-# Clear, bounded, read-only investigation
-scripts/codex-deepseek-subagent --profile ds-sidecar-flash --effort high --cd "$PWD" "<task>"
+# Default: Flash + max
+scripts/codex-deepseek-subagent --cd "$PWD" "<task>"
 
-# Bounded but branching diagnosis or a small repair
-scripts/codex-deepseek-subagent --profile ds-sidecar-flash --effort max --cd "$PWD" "<task>"
+# Cheaper/faster Flash turn
+scripts/codex-deepseek-subagent --effort high --cd "$PWD" "<task>"
+
+# Escalate to Pro
+scripts/codex-deepseek-subagent --profile ds-sidecar-local --cd "$PWD" "<task>"
 ```
 
 Each execution opens a Terminal monitor with wrapper-verified model, effort,
@@ -135,6 +161,7 @@ Codex remains the main, stable entrypoint. Other framework adapters live in thei
 ├── skills/claude-deepseek-sidecar/
 ├── scripts/codex-deepseek-sidecar
 ├── scripts/codex-deepseek-subagent
+├── scripts/codex-deepseek-keychain-token
 ├── scripts/deepseek-responses-proxy
 ├── scripts/refresh-codex-model-catalog
 └── scripts/terminal-chat

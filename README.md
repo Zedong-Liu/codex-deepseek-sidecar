@@ -6,7 +6,7 @@
 
 🔥 **现已支持 Codex、Claude Code 和 OpenCode**
 
-**不需要第三方代理。带上你自己的 DeepSeek key，内置本地代理会处理 Codex Responses 流量。🚀**
+**不需要第三方代理。Flash 默认直连 DeepSeek 官方原生 Responses API；只有 Pro/Beta 还走内置本地代理。🚀**
 
 `codex-deepseek-sidecar` 是一个 Codex skill，让你的主 agent 可以把边界清晰的子任务——长测试、日志分析、大范围代码探索、独立 review、实现尝试——派给更便宜的 DeepSeek 工人 agent。
 
@@ -24,7 +24,7 @@
 ```text
 安装并使用 https://github.com/Zedong-Liu/codex-deepseek-sidecar。
 我有 DeepSeek API key；如果本机还没有配置，请向我索取。
-如果需要，请配置本地代理/profile；使用内置代理时请启动并保持它运行。
+Flash 默认直连官方原生 Responses API；Pro/Beta 需要本地代理时请启动并保持它运行。
 然后为当前仓库启动一个 DeepSeek sidecar，用它处理适合分派的长任务或日志任务。
 ```
 
@@ -47,7 +47,7 @@
 ## ✨ 为什么用户会想用
 
 - 💸 **大幅降低 worker token 成本**：把重复读文件、看日志、跑测试、大范围探索从昂贵 GPT token 迁移到 DeepSeek worker token。很多工作流可以瞄准 **降低 80-90% 的 token 成本**。
-- **不需要第三方代理**：仓库内置一个小型 Python 代理，把 Codex Responses API 桥接到 DeepSeek Chat Completions。使用内置 profile 时，本地代理进程需要保持运行。
+- **不需要第三方代理**：Flash profile 直连 DeepSeek 官方原生 Responses API（`wire_api = "responses"`），凭据通过 Codex 官方的 Keychain-backed `auth.command` 提供；只有 Pro/Beta 仍使用仓库内置的小型 Python 代理桥接。
 - **GPT 仍然做主脑**：昂贵模型负责规划、判断、综合；DeepSeek 负责边界清晰的工人任务。
 - **继续使用 Codex harness**：sidecar 仍然具备 Codex 的文件访问、命令执行、会话保持和结果汇报能力。
 
@@ -76,7 +76,7 @@
 当你要求 Codex 使用这个 skill 时，它可以：
 
 - 把仓库安装成 Codex skill。
-- 如果本地没有可用 DeepSeek provider，就启动内置轻量代理。
+- Flash 默认直连官方原生 Responses API；仅在 Pro/Beta 需要时启动内置轻量代理。
 - 一次性配置 Codex profile，避免每次任务重复设置。
 - 为边界清晰的任务启动 DeepSeek sidecar。
 - 跟踪 task ID 和 session，确保后续对话回到正确的 worker。
@@ -84,30 +84,51 @@
 
 这些操作细节不应该塞给人类读者。Agent-facing instructions 放在 [SKILL.md](SKILL.md)。
 
-## 🔌 内置代理
+## 🔌 传输层：官方原生 + 内置代理（Pro/Beta 备用）
+
+Flash profile 现在走 DeepSeek 官方推荐的接入方式：Codex 直接使用
+`https://api.deepseek.com/` 的 Responses API，无需任何中间转换。API key 不写入
+`config.toml`，而是由 Codex 官方的 `[model_providers.<id>.auth]` 命令从 macOS
+Keychain 项 `codex-deepseek-official` 读取。DeepSeek 官方文档目前只对
+`deepseek-v4-flash` 开放 Codex 接入（Pro 预计 2026 年 8 月初开放），因此在官方
+开放前，`ds-sidecar-local`（Pro）和 `ds-sidecar-beta` 继续使用内置代理。
 
 内置的 `deepseek-responses-proxy` 刻意保持很小：只用 Python 标准库，默认只监听本地，并针对 Codex 的大请求体设计。它会桥接 function tools；对于 V4 Flash 偶尔以 DSML 文本而非 API `tool_calls` 字段返回的工具调用，代理会在输出给 Codex 前还原为真实结构化调用（流式输出也会先完成此检查），不会把工具调用误显示为最终回答。它还会忽略 Codex 默认附带但 DeepSeek Chat 不支持的 Responses built-in tools；如果请求明确要求某个不支持的 built-in tool，则返回明确的错误。代理只连接官方 `https://api.deepseek.com`，可通过环境变量或私有 key 文件取得凭据；不要把 key 放进仓库、profile 或 prompt。
 
 ## 🛠️ 稳定运行与会话
 
-首次使用时先在你的 secret manager 或用户级 LaunchAgent 中提供
-`DEEPSEEK_API_KEY` 并启动本地代理，然后运行：
+首次使用时把 DeepSeek API key 存进 macOS Keychain 项 `codex-deepseek-official`
+（当前用户；其他平台可用 `DEEPSEEK_API_KEY` / `DEEPSEEK_API_KEY_FILE`），然后运行：
 
 ```bash
 scripts/codex-deepseek-subagent --configure
+```
+
+`--configure` 只写 `~/.codex/ds-sidecar-*.config.toml` 这类 sidecar profile，
+不修改 `~/.codex/config.toml` 的顶层 `model` / `model_provider` / 认证键，因此
+不会影响你的 ChatGPT/Codex 登录状态。**不要**直接运行 DeepSeek 官方一键脚本
+（`bash <(curl -fsSL https://cdn.deepseek.com/api-docs/codex-deepseek-setup.sh)`），
+它会改写全局配置并隐藏 ChatGPT 登录会话组；本 skill 在 sidecar profile 里实现了
+同一套官方 provider 配置。Pro/Beta 仍需要本地代理（launchd 服务
+`com.captainliu.deepseek-sidecar-proxy`）：
+
+```bash
 curl -fsS http://127.0.0.1:12359/v1/ready
 ```
 
-默认 profile 是稳定 API 上的 DeepSeek V4 Pro。对边界清晰的低成本任务可选
-Flash；`--effort high|max` 会选择官方思考强度，且保存的 session 会记住选用的
-profile 与强度：
+默认 profile 是稳定 API 上的 DeepSeek V4 Flash，思考强度 `max`。需要更强工人时用
+`--profile ds-sidecar-local`（Pro）；`--effort high|max` 可覆盖思考强度，且保存的
+session 会记住选用的 profile 与强度：
 
 ```bash
-# 清晰、只读、范围有限的排查
-scripts/codex-deepseek-subagent --profile ds-sidecar-flash --effort high --cd "$PWD" "<task>"
+# 默认：Flash + max
+scripts/codex-deepseek-subagent --cd "$PWD" "<task>"
 
-# 有限但分支较多的诊断或小修复
-scripts/codex-deepseek-subagent --profile ds-sidecar-flash --effort max --cd "$PWD" "<task>"
+# 更便宜/更快的 Flash 回合
+scripts/codex-deepseek-subagent --effort high --cd "$PWD" "<task>"
+
+# 升级到 Pro
+scripts/codex-deepseek-subagent --profile ds-sidecar-local --cd "$PWD" "<task>"
 ```
 
 每次执行会打开 Terminal 监视窗口，显示由 wrapper 校验的 model、effort、profile、
@@ -133,6 +154,7 @@ Codex 仍然是主线稳定入口。其他框架适配放在各自安装面里�
 ├── skills/claude-deepseek-sidecar/
 ├── scripts/codex-deepseek-sidecar
 ├── scripts/codex-deepseek-subagent
+├── scripts/codex-deepseek-keychain-token
 ├── scripts/deepseek-responses-proxy
 ├── scripts/refresh-codex-model-catalog
 └── scripts/terminal-chat

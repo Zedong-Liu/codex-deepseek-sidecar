@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Print the DeepSeek API key for Codex's command-backed provider auth
+# ([model_providers.<id>.auth]). The key never appears in config.toml or in a
+# prompt; it comes from the user's environment or the macOS Keychain.
+#
+# Resolution order on macOS: the dedicated Keychain item
+# "codex-deepseek-official" is authoritative, so a stray $DEEPSEEK_API_KEY in
+# the environment (for example a benchmark or VibeAround credential) can never
+# replace the official DeepSeek key. On other platforms, or when the Keychain
+# item is missing, fall back to $DEEPSEEK_API_KEY then $DEEPSEEK_API_KEY_FILE.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  if security find-generic-password -s codex-deepseek-official -a "$(id -un)" -w; then
+    exit 0
+  fi
+fi
+
+if [[ -n "${DEEPSEEK_API_KEY:-}" ]]; then
+  printf '%s' "$DEEPSEEK_API_KEY"
+  exit 0
+fi
+
+if [[ -n "${DEEPSEEK_API_KEY_FILE:-}" && -r "${DEEPSEEK_API_KEY_FILE:-}" ]]; then
+  cat "$DEEPSEEK_API_KEY_FILE"
+  exit 0
+fi
+
+echo "error: DeepSeek API key not found; set DEEPSEEK_API_KEY or DEEPSEEK_API_KEY_FILE" >&2
+exit 1
