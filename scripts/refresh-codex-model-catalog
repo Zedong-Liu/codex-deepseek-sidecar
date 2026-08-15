@@ -32,6 +32,12 @@ def catalog_template(source: pathlib.Path) -> dict[str, Any]:
 
 def deepseek_model(template: dict[str, Any], slug: str, display_name: str, description: str) -> dict[str, Any]:
     model = copy.deepcopy(template)
+    # Codex desktop's cached catalog may omit this wire-format field even
+    # though the CLI requires it when loading a custom model catalog.
+    model.setdefault(
+        "base_instructions",
+        model.get("model_messages", {}).get("instructions_template", ""),
+    )
     model.update(
         {
             "slug": slug,

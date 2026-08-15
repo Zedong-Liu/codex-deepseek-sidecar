@@ -858,7 +858,6 @@ if [[ -n "$session_id" ]]; then
     --profile "$profile"
     --skip-git-repo-check
     --sandbox danger-full-access
-    -c mcp_servers.vibearound.enabled=false
     "${effort_override[@]}"
     resume
     "$session_id"
@@ -870,7 +869,6 @@ else
     --profile "$profile"
     --skip-git-repo-check
     --sandbox danger-full-access
-    -c mcp_servers.vibearound.enabled=false
     "${effort_override[@]}"
     -C "$workdir"
   )
