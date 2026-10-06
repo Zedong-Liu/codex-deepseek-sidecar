@@ -1,3 +1,5 @@
+
+
 # Codex-deepseek-sidecar
 
 [English](README.en.md) | 中文
@@ -86,12 +88,7 @@ Flash 默认直连官方原生 Responses API；Pro/Beta 需要本地代理时请
 
 ## 🔌 传输层：官方原生 + 内置代理（Pro/Beta 备用）
 
-Flash profile 现在走 DeepSeek 官方推荐的接入方式：Codex 直接使用
-`https://api.deepseek.com/` 的 Responses API，无需任何中间转换。API key 不写入
-`config.toml`，而是由 Codex 官方的 `[model_providers.<id>.auth]` 命令从 macOS
-Keychain 项 `codex-deepseek-official` 读取。DeepSeek 官方文档目前只对
-`deepseek-v4-flash` 开放 Codex 接入（Pro 预计 2026 年 8 月初开放），因此在官方
-开放前，`ds-sidecar-local`（Pro）和 `ds-sidecar-beta` 继续使用内置代理。
+Flash profile 现在走 DeepSeek 官方推荐的接入方式：Codex 直接使用 `https://api.deepseek.com/` 的 Responses API，无需任何中间转换。API key 不写入 `config.toml`，而是由 Codex 官方的 `[model_providers.<id>.auth]` 命令从 macOS Keychain 项 `codex-deepseek-official` 读取。DeepSeek 官方文档目前只对 `deepseek-v4-flash` 开放 Codex 接入（Pro 预计 2026 年 8 月初开放），因此在官方开放前，`ds-sidecar-local`（Pro）和 `ds-sidecar-beta` 继续使用内置代理。
 
 内置的 `deepseek-responses-proxy` 刻意保持很小：只用 Python 标准库，默认只监听本地，并针对 Codex 的大请求体设计。它会桥接 function tools；对于 V4 Flash 偶尔以 DSML 文本而非 API `tool_calls` 字段返回的工具调用，代理会在输出给 Codex 前还原为真实结构化调用（流式输出也会先完成此检查），不会把工具调用误显示为最终回答。它还会忽略 Codex 默认附带但 DeepSeek Chat 不支持的 Responses built-in tools；如果请求明确要求某个不支持的 built-in tool，则返回明确的错误。代理只连接官方 `https://api.deepseek.com`，可通过环境变量或私有 key 文件取得凭据；不要把 key 放进仓库、profile 或 prompt。
 
